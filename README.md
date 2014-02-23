@@ -21,6 +21,7 @@ Usage:
 Installation
 ------------
 
+- ./autogen.sh
 - ./configure
 - make
 - make install
