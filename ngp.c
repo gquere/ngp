@@ -1093,6 +1093,9 @@ int main(int argc, char *argv[])
 			break;
 		case ENTER:
 		case '\n':
+			if (current->nbentry == 0) {
+				break;
+			}
 			ncurses_stop();
 			open_entry(current->cursor + current->index, editor,
 				current->pattern);
