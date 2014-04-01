@@ -262,9 +262,10 @@ static void get_args(int argc, char *argv[], extension_list_t **curext, exclude_
 {
 	int opt;
 	exclude_list_t		*tmpexcl;
-	extension_list_t	*tmpext;
+	extension_list_t	*tmpext, *tmpext2;
+	specific_files_t	*curspec, *tmpspec;
 
-	while ((opt = getopt(argc, argv, "hit:refx:")) != -1) {
+	while ((opt = getopt(argc, argv, "hio:t:refx:")) != -1) {
 		switch (opt) {
 		case 'h':
 			usage();
@@ -272,12 +273,36 @@ static void get_args(int argc, char *argv[], extension_list_t **curext, exclude_
 		case 'i':
 			strcpy(mainsearch.options, "-i");
 			break;
+		case 'o':
+			/* free extension list */
+			tmpext = mainsearch_attr.firstext;
+			while (tmpext) {
+				tmpext2 = tmpext;
+				tmpext = tmpext->next;
+				free(tmpext2);
+			}
+			mainsearch_attr.firstext = NULL;
+
+			/* free specific list */
+			curspec = mainsearch_attr.firstspec;
+			while (curspec) {
+				tmpspec = curspec;
+				curspec = curspec->next;
+				free(tmpspec);
+			}
+			mainsearch_attr.firstspec = NULL;
+			/* deliberate fall-through */
 		case 't':
 			//FIXME: maybe the LL is empty hehe ...
 			tmpext = malloc(sizeof(extension_list_t));
 			strncpy(tmpext->ext, optarg, LINE_MAX);
 			tmpext->next = NULL;
-			(*curext)->next = tmpext;
+			if (!mainsearch_attr.firstext) {
+				mainsearch_attr.firstext = tmpext;
+			} else {
+				(*curext)->next = tmpext;
+			}
+			tmpext->next = NULL;
 			*curext = tmpext;
 			break;
 		case 'r':
@@ -410,7 +435,8 @@ static void usage(void)
 	fprintf(stderr, "options:\n");
 	fprintf(stderr, " -i : ignore case distinctions in pattern\n");
 	fprintf(stderr, " -r : raw mode\n");
-	fprintf(stderr, " -t type : look for a file extension only\n");
+	fprintf(stderr, " -t type : add an extension to the list\n");
+	fprintf(stderr, " -o type : look for this extension only\n");
 	fprintf(stderr, " -e : pattern is a regexp\n");
 	fprintf(stderr, " -x folder : exclude directory from search\n");
 	fprintf(stderr, " -f : follow symlinks (default doesn't)\n");
