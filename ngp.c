@@ -182,16 +182,25 @@ static const char * get_config(const char *editor, extension_list_t **curext,
 	config_t cfg;
 	const char *specific_files;
 	const char *extensions;
-	specific_files_t	*tmpspec;
-	extension_list_t	*tmpext;
+	specific_files_t *tmpspec;
+	extension_list_t *tmpext;
+	char *env_editor;
+	char *ptr_env;
 
-	/* grab conf */
+	/* get EDITOR environment variable */
+	env_editor = getenv("EDITOR");
+	if (!(ptr_env = strrchr(env_editor, '/')))
+		ptr_env = env_editor;
+
+	/* grab editor string from /etc/ngprc */
 	configuration_init(&cfg);
-	if (!config_lookup_string(&cfg, "editor", &editor)) {
-		fprintf(stderr, "ngprc: no editor string found!\n");
+	if (!config_lookup_string(&cfg, ptr_env, &editor)) {
+		fprintf(stderr, "ngprc: no editor string found for %s !\n", ptr_env);
+		fprintf(stderr, "please submit a bug for ngp to support your editor\n");
 		exit(-1);
 	}
 
+	/* grab list of specific files from /etc/ngprc */
 	if (!config_lookup_string(&cfg, "files", &specific_files)) {
 		fprintf(stderr, "ngprc: no files string found!\n");
 		exit(-1);
