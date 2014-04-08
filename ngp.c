@@ -174,7 +174,7 @@ static void ncurses_init()
 	curs_set(0);
 }
 
-static const char * get_config(const char *editor, extension_list_t **curext,
+static const char * get_config(extension_list_t **curext,
 		specific_files_t **curspec)
 {
 	char *ptr;
@@ -186,6 +186,7 @@ static const char * get_config(const char *editor, extension_list_t **curext,
 	extension_list_t *tmpext;
 	char *env_editor = NULL;
 	char *ptr_env;
+	const char *editor_cmd;
 
 	/* get EDITOR environment variable */
 	env_editor = getenv("EDITOR");
@@ -198,9 +199,10 @@ static const char * get_config(const char *editor, extension_list_t **curext,
 
 	/* grab editor string from /etc/ngprc */
 	configuration_init(&cfg);
-	if (!config_lookup_string(&cfg, ptr_env, &editor)) {
-		fprintf(stderr, "ngprc: no editor string found for %s !\n", ptr_env);
+	if (!config_lookup_string(&cfg, ptr_env, &editor_cmd)) {
+		fprintf(stderr, "ngprc: no editorcmd string found for %s !\n", ptr_env);
 		fprintf(stderr, "please submit a bug for ngp to support your editor\n");
+		config_lookup_string(&cfg, "vim", &editor_cmd);
 	}
 
 	/* grab list of specific files from /etc/ngprc */
@@ -246,7 +248,7 @@ static const char * get_config(const char *editor, extension_list_t **curext,
 		ptr = strtok_r(NULL, " ", &buf);
 	}
 
-	return editor;
+	return editor_cmd;
 }
 
 //FIXME: move to utils
@@ -480,7 +482,7 @@ static char * vim_sanitize(const char *search_pattern)
 	return sanitized_pattern;
 }
 
-static void open_entry(int index, const char *editor, const char *pattern)
+static void open_entry(int index, const char *editor_cmd, const char *pattern)
 {
 	char command[PATH_MAX];
 	char filtered_file_name[PATH_MAX];
@@ -494,7 +496,7 @@ static void open_entry(int index, const char *editor, const char *pattern)
 	file_index = find_file(index);
 	synchronized(mainsearch.data_mutex) {
 		strcpy(line_copy, current->entries[index].data);
-		snprintf(command, sizeof(command), editor,
+		snprintf(command, sizeof(command), editor_cmd,
 			extract_line_number(line_copy),
 			remove_double_appearance(
 				current->entries[file_index].data, '/',
@@ -1051,7 +1053,7 @@ int main(int argc, char *argv[])
 {
 	int ch;
 	int first = 0;
-	const char *editor = NULL;
+	const char *editor_cmd;
 	pthread_mutex_t *mutex;
 	search_t *tmp;
 	specific_files_t	*curspec = NULL;
@@ -1061,7 +1063,7 @@ int main(int argc, char *argv[])
 	current = &mainsearch;
 	init_searchstruct(&mainsearch);
 	pthread_mutex_init(&mainsearch.data_mutex, NULL);
-	editor = get_config(editor, &curext, &curspec);
+	editor_cmd = get_config(&curext, &curspec);
 	get_args(argc, argv, &curext, &curexcl);
 
 	if (argc - optind < 1 || argc - optind > 2) {
@@ -1136,7 +1138,7 @@ int main(int argc, char *argv[])
 				break;
 			}
 			ncurses_stop();
-			open_entry(current->cursor + current->index, editor,
+			open_entry(current->cursor + current->index, editor_cmd,
 				current->pattern);
 			ncurses_init();
 			resize(&current->index, &current->cursor);
