@@ -92,7 +92,6 @@ typedef struct s_search_t {
 	/* search */
 	char directory[PATH_MAX];
 	char pattern[LINE_MAX];
-	char options[LINE_MAX];
 	unsigned int is_regex:1;
 	regex_t *regex;
 
@@ -106,6 +105,7 @@ typedef struct s_mainsearch_attr {
 	unsigned int raw:1;
 	unsigned int follow_symlinks:1;
 	unsigned int has_excludes:1;
+	unsigned int is_insensitive:1;
 
 	exclude_list_t		*firstexcl;
 	specific_files_t	*firstspec;
@@ -274,7 +274,7 @@ static void get_args(int argc, char *argv[], extension_list_t **curext, exclude_
 			usage();
 			break;
 		case 'i':
-			strcpy(mainsearch.options, "-i");
+			mainsearch_attr.is_insensitive = 1;
 			break;
 		case 'o':
 			/* free extension list */
@@ -499,7 +499,8 @@ static void open_entry(int index, const char *editor, const char *pattern)
 			remove_double_appearance(
 				current->entries[file_index].data, '/',
 				filtered_file_name),
-			sanitized_pattern);
+			sanitized_pattern,
+			mainsearch_attr.is_insensitive ? "\\c" : "");
 	}
 	system(command);
 	free(sanitized_pattern);
@@ -747,7 +748,7 @@ static char * regex(const char *line, const char *pattern)
 		return NULL;
 }
 
-static int parse_file(const char *file, const char *pattern, char *options)
+static int parse_file(const char *file, const char *pattern)
 {
 	FILE *f;
 	char line[LINE_MAX];
@@ -762,7 +763,7 @@ static int parse_file(const char *file, const char *pattern, char *options)
 		return -1;
 	}
 
-	if (strstr(options, "-i") == NULL) {
+	if (mainsearch_attr.is_insensitive == 0) {
 		parser = strstr;
 	} else {
 		parser = strcasestr;
@@ -795,7 +796,7 @@ static int parse_file(const char *file, const char *pattern, char *options)
 	return 0;
 }
 
-static void lookup_file(const char *file, const char *pattern, char *options)
+static void lookup_file(const char *file, const char *pattern)
 {
 	errno = 0;
 	pthread_mutex_t		*mutex;
@@ -803,13 +804,13 @@ static void lookup_file(const char *file, const char *pattern, char *options)
 
 	if (mainsearch_attr.raw) {
 		synchronized(mainsearch.data_mutex)
-			parse_file(file, pattern, options);
+			parse_file(file, pattern);
 		return;
 	}
 
 	if (is_specific_file(file)) {
 		synchronized(mainsearch.data_mutex)
-			parse_file(file, pattern, options);
+			parse_file(file, pattern);
 		return;
 	}
 
@@ -817,14 +818,14 @@ static void lookup_file(const char *file, const char *pattern, char *options)
 	while (curext) {
 		if (!strcmp(curext->ext, file + strlen(file) - strlen(curext->ext))) {
 				synchronized(mainsearch.data_mutex)
-				parse_file(file, pattern, options);
+				parse_file(file, pattern);
 			break;
 		}
 		curext = curext->next;
 	}
 }
 
-static void lookup_directory(const char *dir, const char *pattern, char *options)
+static void lookup_directory(const char *dir, const char *pattern)
 {
 	DIR *dp;
 
@@ -847,7 +848,7 @@ static void lookup_directory(const char *dir, const char *pattern, char *options
 				ep->d_name);
 
 			if (!is_simlink(file_path) || mainsearch_attr.follow_symlinks)
-				lookup_file(file_path, pattern, options);
+				lookup_file(file_path, pattern);
 		}
 
 		/* directory */
@@ -855,7 +856,7 @@ static void lookup_directory(const char *dir, const char *pattern, char *options
 			if (!is_dir_exclude(ep->d_ino)) {
 				char path_dir[PATH_MAX] = "";
 				snprintf(path_dir, PATH_MAX, "%s/%s", dir, ep->d_name);
-				lookup_directory(path_dir, pattern, options);
+				lookup_directory(path_dir, pattern);
 			}
 		}
 	}
@@ -867,9 +868,9 @@ static void * lookup_thread(void *arg)
 	search_t *d = (search_t *) arg;
 
 	if (isfile(d->directory)) {
-		parse_file(d->directory, d->pattern, d->options);
+		parse_file(d->directory, d->pattern);
 	} else {
-		lookup_directory(d->directory, d->pattern, d->options);
+		lookup_directory(d->directory, d->pattern);
 	}
 
 	d->status = 0;
