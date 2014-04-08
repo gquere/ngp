@@ -184,20 +184,23 @@ static const char * get_config(const char *editor, extension_list_t **curext,
 	const char *extensions;
 	specific_files_t *tmpspec;
 	extension_list_t *tmpext;
-	char *env_editor;
+	char *env_editor = NULL;
 	char *ptr_env;
 
 	/* get EDITOR environment variable */
 	env_editor = getenv("EDITOR");
-	if (!(ptr_env = strrchr(env_editor, '/')))
-		ptr_env = env_editor;
+	if (env_editor) {
+		if (!(ptr_env = strrchr(env_editor, '/')))
+			ptr_env = env_editor;
+	} else {
+		ptr_env = "vim";
+	}
 
 	/* grab editor string from /etc/ngprc */
 	configuration_init(&cfg);
 	if (!config_lookup_string(&cfg, ptr_env, &editor)) {
 		fprintf(stderr, "ngprc: no editor string found for %s !\n", ptr_env);
 		fprintf(stderr, "please submit a bug for ngp to support your editor\n");
-		exit(-1);
 	}
 
 	/* grab list of specific files from /etc/ngprc */
