@@ -54,33 +54,33 @@ for(mutex = &MUTEX; \
 mutex && !pthread_mutex_lock(mutex); \
 pthread_mutex_unlock(mutex), mutex = 0)
 
-typedef struct s_entry_t {
+struct entry {
 	char *data;
 	char isfile:1;
-} entry_t;
+};
 
-typedef struct s_exclude_list {
+struct exclude_list {
 	ino_t			d_ino;
-	struct s_exclude_list	*next;
-} exclude_list_t;
+	struct exclude_list	*next;
+};
 
-typedef struct s_extension_list {
+struct extension_list {
 	char			ext[LINE_MAX];
-	struct s_extension_list	*next;
-} extension_list_t;
+	struct extension_list	*next;
+};
 
-typedef struct s_specific_files {
+struct specific_files {
 	char			spec[LINE_MAX];
-	struct s_specific_files	*next;
-} specific_files_t;
+	struct specific_files	*next;
+};
 
-typedef struct s_search_t {
+struct search {
 	/* screen */
 	int index;
 	int cursor;
 
 	/* data */
-	entry_t *entries;
+	struct entry *entries;
 	unsigned int nbentry;
 	unsigned int nb_lines;
 	unsigned int size;
@@ -96,25 +96,25 @@ typedef struct s_search_t {
 	regex_t *regex;
 
 	/* search in search */
-	struct s_search_t *father;
-	struct s_search_t *child;
-} search_t;
+	struct search *father;
+	struct search *child;
+};
 
 /* attributes specific to mainsearch */
-typedef struct s_mainsearch_attr {
+struct mainsearch_attr {
 	unsigned int raw:1;
 	unsigned int follow_symlinks:1;
 	unsigned int has_excludes:1;
 	unsigned int is_insensitive:1;
 
-	exclude_list_t		*firstexcl;
-	specific_files_t	*firstspec;
-	extension_list_t	*firstext;
-} mainsearch_attr_t;
+	struct exclude_list	*firstexcl;
+	struct specific_files	*firstspec;
+	struct extension_list	*firstext;
+};
 
-static search_t			mainsearch;
-static mainsearch_attr_t	mainsearch_attr;
-static search_t			*current;
+static struct search		mainsearch;
+static struct mainsearch_attr	mainsearch_attr;
+static struct search		*current;
 static pthread_t		pid;
 
 static void usage(void);
@@ -143,7 +143,7 @@ static void configuration_init(config_t *cfg)
 	}
 }
 
-static void init_searchstruct(search_t *searchstruct)
+static void init_searchstruct(struct search *searchstruct)
 {
 	searchstruct->index = 0;
 	searchstruct->cursor = 0;
@@ -174,16 +174,16 @@ static void ncurses_init()
 	curs_set(0);
 }
 
-static const char * get_config(extension_list_t **curext,
-		specific_files_t **curspec)
+static const char * get_config(struct extension_list **curext,
+		struct specific_files **curspec)
 {
 	char *ptr;
 	char *buf;
 	config_t cfg;
 	const char *specific_files;
 	const char *extensions;
-	specific_files_t *tmpspec;
-	extension_list_t *tmpext;
+	struct specific_files *tmpspec;
+	struct extension_list *tmpext;
 	char *env_editor = NULL;
 	char *ptr_env;
 	const char *editor_cmd;
@@ -214,7 +214,7 @@ static const char * get_config(extension_list_t **curext,
 	/* get specific files names from configuration */
 	ptr = strtok_r((char *) specific_files, " ", &buf);
 	while (ptr != NULL) {
-		tmpspec = malloc(sizeof(specific_files_t));
+		tmpspec = malloc(sizeof(struct specific_files));
 		if (!mainsearch_attr.firstspec) {
 			mainsearch_attr.firstspec = tmpspec;
 		} else {
@@ -235,7 +235,7 @@ static const char * get_config(extension_list_t **curext,
 
 	ptr = strtok_r((char *) extensions, " ", &buf);
 	while (ptr != NULL) {
-		tmpext = malloc(sizeof(extension_list_t));
+		tmpext = malloc(sizeof(struct extension_list));
 		if (!mainsearch_attr.firstext) {
 			mainsearch_attr.firstext = tmpext;
 		} else {
@@ -263,12 +263,13 @@ static ino_t get_inode_from_path(const char *path)
 	return buf.st_ino;
 }
 
-static void get_args(int argc, char *argv[], extension_list_t **curext, exclude_list_t **curexcl)
+static void get_args(int argc, char *argv[], struct extension_list **curext,
+			struct exclude_list **curexcl)
 {
 	int opt;
-	exclude_list_t		*tmpexcl;
-	extension_list_t	*tmpext, *tmpext2;
-	specific_files_t	*curspec, *tmpspec;
+	struct exclude_list	*tmpexcl;
+	struct extension_list	*tmpext, *tmpext2;
+	struct specific_files	*curspec, *tmpspec;
 
 	while ((opt = getopt(argc, argv, "hio:t:refx:")) != -1) {
 		switch (opt) {
@@ -299,7 +300,7 @@ static void get_args(int argc, char *argv[], extension_list_t **curext, exclude_
 			/* deliberate fall-through */
 		case 't':
 			//FIXME: maybe the LL is empty hehe ...
-			tmpext = malloc(sizeof(extension_list_t));
+			tmpext = malloc(sizeof(struct extension_list));
 			strncpy(tmpext->ext, optarg, LINE_MAX);
 			tmpext->next = NULL;
 			if (!mainsearch_attr.firstext) {
@@ -320,7 +321,7 @@ static void get_args(int argc, char *argv[], extension_list_t **curext, exclude_
 			mainsearch_attr.follow_symlinks = 1;
 			break;
 		case 'x':
-			tmpexcl = malloc(sizeof(exclude_list_t));
+			tmpexcl = malloc(sizeof(struct exclude_list));
 			if (!mainsearch_attr.firstexcl) {
 				mainsearch_attr.has_excludes = 1;
 				mainsearch_attr.firstexcl = tmpexcl;
@@ -341,7 +342,7 @@ static void get_args(int argc, char *argv[], extension_list_t **curext, exclude_
 
 
 /*************************** UTILS ********************************************/
-static int is_file(int index, search_t *cursearch)
+static int is_file(int index, struct search *cursearch)
 {
 	return cursearch->entries[index].isfile;
 }
@@ -356,7 +357,7 @@ static int isfile(char *nodename)
 
 static int is_dir_exclude(const ino_t d_ino)
 {
-	exclude_list_t *curex;
+	struct exclude_list *curex;
 
 	/* check if directory has been excluded */
 	if (mainsearch_attr.has_excludes) {
@@ -391,7 +392,7 @@ static int is_simlink(char *file_path)
 static int is_specific_file(const char *name)
 {
 	char *name_begins;
-	specific_files_t *curspec;
+	struct specific_files *curspec;
 
 	curspec = mainsearch_attr.firstspec;
 	while (curspec) {
@@ -684,17 +685,17 @@ static void display_status(void)
 
 
 /*************************** MEMORY HANDLING **********************************/
-static void check_alloc(search_t *toinc, int size)
+static void check_alloc(struct search *toinc, int size)
 {
 	if (toinc->nbentry >= toinc->size) {
 		toinc->size += size;
-		toinc->entries = realloc(toinc->entries, toinc->size * sizeof(entry_t));
+		toinc->entries = realloc(toinc->entries, toinc->size * sizeof(struct entry));
 	}
 }
 
 static void mainsearch_add_file(const char *file)
 {
-	char	*new_file;
+	char *new_file;
 
 	check_alloc(&mainsearch, 500);
 	new_file = malloc(PATH_MAX * sizeof(char));
@@ -706,7 +707,7 @@ static void mainsearch_add_file(const char *file)
 
 static void mainsearch_add_line(const char *line)
 {
-	char	*new_line;
+	char *new_line;
 
 	check_alloc(&mainsearch, 500);
 	new_line = malloc(LINE_MAX * sizeof(char));
@@ -722,7 +723,7 @@ static void mainsearch_add_line(const char *line)
 
 
 /*************************** PARSING ******************************************/
-static int is_regex_valid(search_t *cursearch)
+static int is_regex_valid(struct search *cursearch)
 {
 	regex_t	*reg;
 
@@ -802,7 +803,7 @@ static void lookup_file(const char *file, const char *pattern)
 {
 	errno = 0;
 	pthread_mutex_t		*mutex;
-	extension_list_t	*curext;
+	struct extension_list	*curext;
 
 	if (mainsearch_attr.raw) {
 		synchronized(mainsearch.data_mutex)
@@ -867,7 +868,7 @@ static void lookup_directory(const char *dir, const char *pattern)
 
 static void * lookup_thread(void *arg)
 {
-	search_t *d = (search_t *) arg;
+	struct search *d = (struct search *) arg;
 
 	if (isfile(d->directory)) {
 		parse_file(d->directory, d->pattern);
@@ -912,9 +913,9 @@ static void subsearch_window(char *search)
 	delwin(searchw);
 }
 
-static search_t * subsearch(search_t *father)
+static struct search * subsearch(struct search *father)
 {
-	search_t	*child;
+	struct search	*child;
 	unsigned int	i;
 	char		*search;
 	bool		orphan_file = 0;
@@ -929,13 +930,13 @@ static search_t * subsearch(search_t *father)
 		return NULL;
 
 	/* create and init subsearch */
-	if ((child = malloc(sizeof(search_t))) == NULL)
+	if ((child = malloc(sizeof(struct search))) == NULL)
 		exit(1);
 
 	init_searchstruct(child);
 	child->father = father;
 	father->child = child;
-	child->entries = calloc(100, sizeof(entry_t));
+	child->entries = calloc(100, sizeof(struct entry));
 	strncpy(child->pattern, search, LINE_MAX);
 	free(search);
 
@@ -957,7 +958,7 @@ static search_t * subsearch(search_t *father)
 			//check_alloc(child, 100); //FIXME this should work ...
 			if (child->nbentry%100 >= 98) {
 				child->size += 100;
-				child->entries = realloc(child->entries, child->size * sizeof(entry_t));
+				child->entries = realloc(child->entries, child->size * sizeof(struct entry));
 			}
 			/* file has entries, add it */
 			if (orphan_file) {
@@ -976,7 +977,7 @@ static search_t * subsearch(search_t *father)
 		}
 	}
 
-	child->entries = realloc(child->entries, child->nbentry * sizeof(entry_t));
+	child->entries = realloc(child->entries, child->nbentry * sizeof(struct entry));
 	child->size = child->nbentry;
 
 	return child;
@@ -984,7 +985,7 @@ static search_t * subsearch(search_t *father)
 
 
 /*************************** CLEANUP ******************************************/
-static void clean_search(search_t *search)
+static void clean_search(struct search *search)
 {
 	unsigned int i;
 
@@ -998,10 +999,10 @@ static void clean_search(search_t *search)
 
 static void clean_all(void)
 {
-	search_t	*next;
-	exclude_list_t	*curex, *tmpex;
-	extension_list_t *curext, *tmpext;
-	specific_files_t *curspec, *tmpspec;
+	struct search		*next;
+	struct exclude_list	*curex, *tmpex;
+	struct extension_list	*curext, *tmpext;
+	struct specific_files	*curspec, *tmpspec;
 
 	/* free linked list of excludes, extensions, specifics */
 	curex = mainsearch_attr.firstexcl;
@@ -1055,10 +1056,10 @@ int main(int argc, char *argv[])
 	int first = 0;
 	const char *editor_cmd;
 	pthread_mutex_t *mutex;
-	search_t *tmp;
-	specific_files_t	*curspec = NULL;
-	extension_list_t	*curext = NULL;
-	exclude_list_t		*curexcl= NULL;
+	struct search *tmp;
+	struct specific_files	*curspec = NULL;
+	struct extension_list	*curext = NULL;
+	struct exclude_list	*curexcl= NULL;
 
 	current = &mainsearch;
 	init_searchstruct(&mainsearch);
@@ -1086,7 +1087,7 @@ int main(int argc, char *argv[])
 
 	signal(SIGINT, sig_handler);
 
-	mainsearch.entries = (entry_t *) calloc(mainsearch.size, sizeof(entry_t));
+	mainsearch.entries = (struct entry *) calloc(mainsearch.size, sizeof(struct entry));
 
 	if (pthread_create(&pid, NULL, &lookup_thread, &mainsearch)) {
 		fprintf(stderr, "ngp: cannot create thread");
