@@ -45,7 +45,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #define QUIT		'q'
 
 #ifdef LINE_MAX
-	#undef LINE_MAX
+#undef LINE_MAX
 #endif
 #define LINE_MAX	256
 
@@ -56,26 +56,33 @@ for(mutex = &MUTEX; \
 mutex && !pthread_mutex_lock(mutex); \
 pthread_mutex_unlock(mutex), mutex = 0)
 
+
+/*************************** DATA STRUCTURES **********************************/
+/* stores an entry, a file or a line */
 struct entry {
 	char *data;
 	char isfile:1;
 };
 
+/* contains the directories to exclude from search */
 struct exclude_list {
 	ino_t			d_ino;
 	struct exclude_list	*next;
 };
 
+/* contains the file extensions to include in search */
 struct extension_list {
 	char			ext[LINE_MAX];
 	struct extension_list	*next;
 };
 
+/* contains the specific files to include in search */
 struct specific_files {
 	char			spec[LINE_MAX];
 	struct specific_files	*next;
 };
 
+/* represents a unique search from which other searches may derive from */
 struct search {
 	/* screen */
 	int index;
@@ -123,6 +130,12 @@ static void usage(void);
 
 
 /*************************** INIT *********************************************/
+/**
+ * Find ngprc that contains the local static config and place its content in
+ * a config structure
+ *
+ * @param cfg	structure to write local static config into
+ */
 static void configuration_init(config_t *cfg)
 {
 	char *user_name;
@@ -145,6 +158,11 @@ static void configuration_init(config_t *cfg)
 	}
 }
 
+/**
+ * Initialize a seach structure with default values
+ *
+ * @param searchstruct	new search structure to init
+ */
 static void init_searchstruct(struct search *searchstruct)
 {
 	searchstruct->index = 0;
@@ -159,6 +177,9 @@ static void init_searchstruct(struct search *searchstruct)
 	searchstruct->child = NULL;
 }
 
+/**
+ * Start a ncurse session
+ */
 static void ncurses_init()
 {
 	initscr();
@@ -176,6 +197,17 @@ static void ncurses_init()
 	curs_set(0);
 }
 
+/**
+ * ngp relies on the configuration file /etc/ngprc
+ * This file is parsed at boot and  its content are copied and converted in
+ * the local structures.
+ *
+ * This file contains the editor commands, the extensions to search and
+ * the specific files to include in the search
+ *
+ * @param curext	linked list that contains the extensions to search
+ * @param curspec	linked list that contains the specific files to search
+ */
 static const char * get_config(struct extension_list **curext,
 		struct specific_files **curspec)
 {
@@ -254,6 +286,14 @@ static const char * get_config(struct extension_list **curext,
 }
 
 //FIXME: move to utils
+/**
+ * Some folders should be excluded but they are given from a local position
+ * we need to translate in an absolute position since the directory parsing is
+ * recursive. Therefore convert local path to inode and exclude inodes.
+ *
+ * @param path	local path of directory
+ * @return	inode of directory
+ */
 static ino_t get_inode_from_path(const char *path)
 {
 	struct stat buf;
@@ -265,6 +305,14 @@ static ino_t get_inode_from_path(const char *path)
 	return buf.st_ino;
 }
 
+/**
+ * Parse the arguments received via command line
+ *
+ * @param argc		number of args
+ * @param argv		pointer to array of args
+ * @param curext	linked list of extension files (from ngprc)
+ * @param curexcl	linked list of ignored directories (empty at this point)
+ */
 static void get_args(int argc, char *argv[], struct extension_list **curext,
 			struct exclude_list **curexcl)
 {
@@ -275,13 +323,13 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
 
 	while ((opt = getopt(argc, argv, "hio:t:refx:")) != -1) {
 		switch (opt) {
-		case 'h':
+		case 'h': /* display help */
 			usage();
 			break;
-		case 'i':
+		case 'i': /* insensitive case */
 			mainsearch_attr.is_insensitive = 1;
 			break;
-		case 'o':
+		case 'o': /* look for one extension only */
 			/* free extension list */
 			tmpext = mainsearch_attr.firstext;
 			while (tmpext) {
@@ -300,8 +348,7 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
 			}
 			mainsearch_attr.firstspec = NULL;
 			/* deliberate fall-through */
-		case 't':
-			//FIXME: maybe the LL is empty hehe ...
+		case 't': /* add extensions to the list */
 			tmpext = malloc(sizeof(struct extension_list));
 			strncpy(tmpext->ext, optarg, LINE_MAX);
 			tmpext->next = NULL;
@@ -313,16 +360,17 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
 			tmpext->next = NULL;
 			*curext = tmpext;
 			break;
-		case 'r':
+		case 'r': /* perform raw search (all files) */
 			mainsearch_attr.raw = 1;
 			break;
-		case 'e':
+		case 'e': /* pattern is a regexp */
 			mainsearch.is_regex = 1;
 			break;
-		case 'f':
+		case 'f': /* follow symlinks */
 			mainsearch_attr.follow_symlinks = 1;
 			break;
-		case 'x':
+		case 'x': /* exclude folders from search */
+			/* add excludes to the list */
 			tmpexcl = malloc(sizeof(struct exclude_list));
 			if (!mainsearch_attr.firstexcl) {
 				mainsearch_attr.has_excludes = 1;
@@ -336,6 +384,7 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
 			*curexcl = tmpexcl;
 			break;
 		default:
+			usage();
 			exit(-1);
 			break;
 		}
@@ -344,11 +393,24 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
 
 
 /*************************** UTILS ********************************************/
+/**
+ * Check if an entry in our local structure is a file
+ *
+ * @param index		index of entry in the array
+ * @param cursearch	pointer to current local structure
+ * @return		1 if entry is a file, 0 otherwise
+ */
 static int is_file(int index, struct search *cursearch)
 {
 	return cursearch->entries[index].isfile;
 }
 
+/**
+ * Checks if local node is a file
+ *
+ * @param nodename	node name
+ * @return		1 if file, 0 if directory
+ */
 static int isfile(char *nodename)
 {
 	struct stat buf;
@@ -357,6 +419,12 @@ static int isfile(char *nodename)
 	return !S_ISDIR(buf.st_mode);
 }
 
+/**
+ * Checks if a directory is in the list of excluded directories
+ *
+ * @param d_ino	inode of directory
+ * @return	1 if folder should be ignored, 0 otherwise
+ */
 static int is_dir_exclude(const ino_t d_ino)
 {
 	struct exclude_list *curex;
@@ -375,7 +443,14 @@ static int is_dir_exclude(const ino_t d_ino)
 	return 0;
 }
 
-static int is_dir_special (const char *dir) {
+/**
+ * There are some folders that we want to always ignore, such as version
+ * control.
+ *
+ * @param dir	local directory name
+ * @output	1 if folder should be ignored, 0 otherwise
+ */
+static int is_dir_special(const char *dir) {
 	/* check if directory shouldn't be browsed at all */
 	return  !(strcmp(dir, ".") &&
 		strcmp(dir, "..") &&
@@ -383,6 +458,13 @@ static int is_dir_special (const char *dir) {
 		strcmp(dir, ".svn"));
 }
 
+/**
+ * Checks if a given file is a symlink or not, as we choose to follow them
+ * as an option.
+ *
+ * @param file_path	path of the file
+ * @return		1 if file is a symlink, 0 otherwise
+ */
 static int is_simlink(char *file_path)
 {
 	struct stat filestat;
@@ -391,6 +473,14 @@ static int is_simlink(char *file_path)
 	return S_ISLNK(filestat.st_mode);
 }
 
+/**
+ * We want to include some files that have no extensions, such as Makefiles.
+ * Thus, we check before discarding a file whether it's in the list of special
+ * files.
+ *
+ * @param name	file name
+ * @return	1 if file needs to be scanned, 0 otherwise
+ */
 static int is_specific_file(const char *name)
 {
 	char *name_begins;
@@ -406,6 +496,16 @@ static int is_specific_file(const char *name)
 	return 0;
 }
 
+/**
+ * Depending on where the search is performed, it might be that we store
+ * recurring '/' characters because of the path concatenation. For visual
+ * display, we want to remove the double appearance of such characters.
+ *
+ * @param inital	the string to sanitize
+ * @param c		the character to strip
+ * @param final		the string to write into once clean
+ * @return		sanitized string
+ */
 static char * remove_double_appearance(char *initial, char c, char *final)
 {
 	int i, j;
@@ -429,6 +529,13 @@ static char * remove_double_appearance(char *initial, char c, char *final)
 	return final;
 }
 
+/**
+ * Extracts the line number from a string when we want to open it
+ * and returns the line number to write into the editor command
+ *
+ * @param line	string to extract line number from
+ * @return	line number as a string
+ */
 static char * extract_line_number(char *line)
 {
 	char *token;
@@ -451,6 +558,13 @@ static void usage(void)
 	exit(-1);
 }
 
+/**
+ * Because our search structure is an array and not a linked list,
+ * we may need to recover the file that is the container of a line
+ * and do so by climbing up the array until a file is found.
+ *
+ * @param index	index of the line in the array
+ */
 static int find_file(int index)
 {
 	while (!is_file(index, current))
@@ -459,7 +573,11 @@ static int find_file(int index)
 	return index;
 }
 
-/* escape '/' and ''' characters for vim search command */
+/**
+ * Escape '/' and ''' characters for vim search command by preceding them by '\'
+ *
+ * @param search_pattern	string to sanitize
+ */
 static char * vim_sanitize(const char *search_pattern)
 {
 	int	i = 0, j = 0;
@@ -485,6 +603,13 @@ static char * vim_sanitize(const char *search_pattern)
 	return sanitized_pattern;
 }
 
+/**
+ * Opens a line using the editor variable from the /etc/ngprc conf file
+ *
+ * @param index		line number
+ * @param editor_cmd	prefilled editor command
+ * @param pattern	pattern to highlight
+ */
 static void open_entry(int index, const char *editor_cmd, const char *pattern)
 {
 	char command[PATH_MAX];
@@ -494,10 +619,14 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
 	pthread_mutex_t *mutex;
 	char *sanitized_pattern;
 
+	/* vim doesn't like naked / and ' characters, so escape them */
 	sanitized_pattern = vim_sanitize(pattern);
 
+	/* find the file associated with the line */
 	file_index = find_file(index);
+
 	synchronized(mainsearch.data_mutex) {
+		/* fill the editor system command with our variables */
 		strcpy(line_copy, current->entries[index].data);
 		snprintf(command, sizeof(command), editor_cmd,
 			extract_line_number(line_copy),
@@ -513,6 +642,12 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
 
 
 /*************************** DISPLAY ******************************************/
+/**
+ * Display a line in ncurses
+ *
+ * @param y	vertical position the line should be written at
+ * @param line	line to write
+ */
 static void print_line(int *y, char *line)
 {
 	char *pos, *buf, *pattern, *ptr;
@@ -528,25 +663,40 @@ static void print_line(int *y, char *line)
 	attron(COLOR_PAIR(1));
 	mvprintw(*y, length, "%s", line + length);
 
+	/* find pattern to colorize */
 	pattern = strcasestr(line + length, current->pattern);
 	ptr = line + length;
-
 	move(*y, length);
+
 	while (ptr != pattern) {
 		addch(*ptr);
 		ptr++;
 	}
 
+	/* print colorized pattern on top of current line */
 	attron(COLOR_PAIR(4));
 	printw("%s", current->pattern);
 }
 
-static void print_file(int *y, char *line)
+/**
+ * Display a file in ncurses
+ *
+ * @param y	vertical position the file should be written at
+ * @param file	file to write
+ */
+static void print_file(int *y, char *file)
 {
 	attron(COLOR_PAIR(5));
-	mvprintw(*y, 0, "%s", line);
+	mvprintw(*y, 0, "%s", file);
 }
 
+/**
+ * Display an entry in ncurses, finds entry type and calls corresponding function
+ *
+ * @param y	vertical position the entry should be printed at
+ * @param index	index of the entry in the local array
+ * @param color	indicated whether the user currently position its cursor on the entry
+ */
 static void display_entry(int *y, int *index, int color)
 {
 	char filtered_line[PATH_MAX];
@@ -568,6 +718,12 @@ static void display_entry(int *y, int *index, int color)
 	}
 }
 
+/**
+ * Displays a screen worth of entries
+ *
+ * @param index		current position in the local array
+ * @param cursor	current position of user cursor
+ */
 static void display_entries(int *index, int *cursor)
 {
 	int i = 0;
@@ -583,6 +739,9 @@ static void display_entries(int *index, int *cursor)
 	}
 }
 
+/**
+ * //FIXME: we don't need this do we ?
+ */
 static void resize(int *index, int *cursor)
 {
 	clear();
@@ -590,6 +749,12 @@ static void resize(int *index, int *cursor)
 	refresh();
 }
 
+/**
+ * User pressed PAGE_UP, move one page up
+ *
+ * @param index		current position in the local array
+ * @param cursor	current position of user cursor
+ */
 static void page_up(int *index, int *cursor)
 {
 	clear();
@@ -607,6 +772,12 @@ static void page_up(int *index, int *cursor)
 	display_entries(index, cursor);
 }
 
+/**
+ * User pressed PAGE_DOWN, move one page down
+ *
+ * @param index		current position in the local array
+ * @param cursor	current position of user cursor
+ */
 static void page_down(int *index, int *cursor)
 {
 	int max_index;
@@ -634,6 +805,12 @@ static void page_down(int *index, int *cursor)
 	display_entries(index, cursor);
 }
 
+/**
+ * User pressed KEY_UP, move one entry up
+ *
+ * @param index		current position in the local array
+ * @param cursor	current position of user cursor
+ */
 static void cursor_up(int *index, int *cursor)
 {
 	if (*cursor == 0) {
@@ -656,6 +833,12 @@ static void cursor_up(int *index, int *cursor)
 	display_entries(index, cursor);
 }
 
+/**
+ * User pressed KEY_DOWN, move one entry down
+ *
+ * @param index		current position in the local array
+ * @param cursor	current position of user cursor
+ */
 static void cursor_down(int *index, int *cursor)
 {
 	if (*cursor == (LINES - 1)) {
@@ -678,6 +861,9 @@ static void cursor_down(int *index, int *cursor)
 	display_entries(index, cursor);
 }
 
+/**
+ * Display the search status in the top right corner
+ */
 static void display_status(void)
 {
 	char *rollingwheel[4] = {"/", "-", "\\", "|"};
@@ -695,7 +881,14 @@ static void display_status(void)
 
 
 /*************************** MEMORY HANDLING **********************************/
-static void check_alloc(struct search *toinc, int size)
+/**
+ * Check if the currently allocated size for handling entries if enough,
+ * otherwise increase by size.
+ *
+ * @param toinc	search structure to check size of
+ * @param size	size to incremement of if array is too small
+ */
+static inline void check_alloc(struct search *toinc, int size)
 {
 	if (toinc->nbentry >= toinc->size) {
 		toinc->size += size;
@@ -703,6 +896,11 @@ static void check_alloc(struct search *toinc, int size)
 	}
 }
 
+/**
+ * Add a file to the current search structure
+ *
+ * @param file	name of file
+ */
 static void mainsearch_add_file(const char *file)
 {
 	char *new_file;
@@ -715,6 +913,11 @@ static void mainsearch_add_file(const char *file)
 	mainsearch.nbentry++;
 }
 
+/**
+ * Add a line to the current search structure
+ *
+ * @param line	line to add (including prepended line number)
+ */
 static void mainsearch_add_line(const char *line)
 {
 	char *new_line;
@@ -726,13 +929,21 @@ static void mainsearch_add_line(const char *line)
 	mainsearch.entries[mainsearch.nbentry].isfile = 0;
 	mainsearch.nbentry++;
 	mainsearch.nb_lines++;
-		if (mainsearch.nbentry <= (unsigned) (current->index + LINES)
+
+	/* display entries if we're not filled yet on first screen */
+	if (mainsearch.nbentry <= (unsigned) (current->index + LINES)
 			&& current == &mainsearch)
 		display_entries(&mainsearch.index, &mainsearch.cursor);
 }
 
 
 /*************************** PARSING ******************************************/
+/**
+ * Checks if a regexp is valid
+ *
+ * @param cursearch	search structure containing the regexp
+ * @return		1 if valid, 0 otherwise
+ */
 static int is_regex_valid(struct search *cursearch)
 {
 	regex_t	*reg;
@@ -748,6 +959,14 @@ static int is_regex_valid(struct search *cursearch)
 	return 1;
 }
 
+/**
+ * Parse line using a regexp, and offer a prototype akin to strstr to allow use
+ * of function pointers
+ *
+ * @param line		line to parse
+ * @param pattern	not used, since stored in search structure
+ * @return		NULL if pattern not found, valid string otherwise
+ */
 static char * regex(const char *line, const char *pattern)
 {
 	int ret;
@@ -761,6 +980,14 @@ static char * regex(const char *line, const char *pattern)
 		return NULL;
 }
 
+/**
+ * Core of ngp, parses a file and adds the file and its entries to the local
+ * array if any matches are found.
+ *
+ * @param file		path of file to parse
+ * @param pattern	pattern to match
+ * @return		0 on success, -1 otherwise
+ */
 static int parse_file(const char *file, const char *pattern)
 {
 	int f;
@@ -772,6 +999,7 @@ static int parse_file(const char *file, const char *pattern)
 	char * (*parser)(const char *, const char*);
 	errno = 0;
 
+	/* open file using mmap */
 	f = open(file, O_RDONLY);
 	if (f == -1) {
 		return -1;
@@ -786,6 +1014,7 @@ static int parse_file(const char *file, const char *pattern)
 
 	close(f);
 
+	/* position function pointer on appropriate parser */
 	if (mainsearch_attr.is_insensitive == 0) {
 		parser = strstr;
 	} else {
@@ -800,15 +1029,22 @@ static int parse_file(const char *file, const char *pattern)
 	line_number = 1;
 	start = p;
 
+	/* search the memory mapping for the pattern until EOF */
 	while ((endline = strchr(p, '\n'))) {
 		*endline = '\0';
 		if (__builtin_expect(!!(parser(p, pattern) != NULL), 0)) {
+			/* if no file has been added yet, do it since a line matches */
 			if (__builtin_expect(first, 0)) {
+				/* add file to the local array */
 				mainsearch_add_file(file);
 				first = 0;
 			}
+
+			/* remove \r in line */
 			if (__builtin_expect(!!(p[strlen(p) - 2] == '\r'), 0))
 				p[strlen(p) - 2] = '\0';
+
+			/* add line to the local array */
 			snprintf(full_line, LINE_MAX, "%d:%s", line_number, p);
 			mainsearch_add_line(full_line);
 		}
@@ -822,24 +1058,33 @@ static int parse_file(const char *file, const char *pattern)
 	return 0;
 }
 
+/**
+ * Check if a file should be parsed for pattern and if so call parse_file
+ *
+ * @param file		file name
+ * @param pattern	pattern to find in file
+ */
 static void lookup_file(const char *file, const char *pattern)
 {
 	errno = 0;
 	pthread_mutex_t		*mutex;
 	struct extension_list	*curext;
 
+	/* if the search is of type raw, all file are to be parsed */
 	if (mainsearch_attr.raw) {
 		synchronized(mainsearch.data_mutex)
 			parse_file(file, pattern);
 		return;
 	}
 
+	/* check if file is a specific file */
 	if (is_specific_file(file)) {
 		synchronized(mainsearch.data_mutex)
 			parse_file(file, pattern);
 		return;
 	}
 
+	/* check if file matches the extension list */
 	curext = mainsearch_attr.firstext;
 	while (curext) {
 		if (!strcmp(curext->ext, file + strlen(file) - strlen(curext->ext))) {
@@ -851,6 +1096,13 @@ static void lookup_file(const char *file, const char *pattern)
 	}
 }
 
+/**
+ * Recursively parses a directory and calls lookup_file if a file is found that
+ * matches the criteria of the search
+ *
+ * @param dir		directory to parse
+ * @param patter	pattern to find in files
+ */
 static void lookup_directory(const char *dir, const char *pattern)
 {
 	DIR *dp;
@@ -873,12 +1125,14 @@ static void lookup_directory(const char *dir, const char *pattern)
 			snprintf(file_path, PATH_MAX, "%s/%s", dir,
 				ep->d_name);
 
+			/* check if file is a symlink and we should follow it */
 			if (!is_simlink(file_path) || mainsearch_attr.follow_symlinks)
 				lookup_file(file_path, pattern);
 		}
 
 		/* directory */
 		if (ep->d_type&DT_DIR && !is_dir_special(ep->d_name)) {
+			/* check if directory has been excluded from search */
 			if (!is_dir_exclude(ep->d_ino)) {
 				char path_dir[PATH_MAX] = "";
 				snprintf(path_dir, PATH_MAX, "%s/%s", dir, ep->d_name);
@@ -889,6 +1143,14 @@ static void lookup_directory(const char *dir, const char *pattern)
 	closedir(dp);
 }
 
+/**
+ * Thread spawned by ngp to take care of the memory and the parsing
+ * In case the user submitted a file to ngp instead of a directory, parse file
+ * immediately. Otherwise, parse the directory.
+ *
+ * @param arg	search structure (to cast)
+ * @return	NULL
+ */
 static void * lookup_thread(void *arg)
 {
 	struct search *d = (struct search *) arg;
@@ -905,6 +1167,11 @@ static void * lookup_thread(void *arg)
 
 
 /*************************** SUBSEARCH ****************************************/
+/**
+ * Spawn a subsearch window for the user to write a new pattern into
+ *
+ * @param search	current search structure
+ */
 static void subsearch_window(char *search)
 {
 	WINDOW	*searchw;
@@ -936,6 +1203,12 @@ static void subsearch_window(char *search)
 	delwin(searchw);
 }
 
+/**
+ * Create a subsearch to the current search and make this one the current one
+ *
+ * @param father	the current search
+ * @return		the new current search, child of father
+ */
 static struct search * subsearch(struct search *father)
 {
 	struct search	*child;
@@ -1008,18 +1281,29 @@ static struct search * subsearch(struct search *father)
 
 
 /*************************** CLEANUP ******************************************/
+/**
+ * Free a search structure
+ */
 static void clean_search(struct search *search)
 {
 	unsigned int i;
 
+	/* free the actual entries in the array */
 	for (i = 0; i < search->nbentry; i++) {
 		free(search->entries[i].data);
 	}
+
+	/* free the array */
 	free(search->entries);
+
+	/* free the rest of the search structure */
 	free(search->regex);
 //	free(search); //wont work cuz mainsearch ain't no pointer yo
 }
 
+/**
+ * Free all structures used by ngp
+ */
 static void clean_all(void)
 {
 	struct search		*next;
@@ -1049,6 +1333,7 @@ static void clean_all(void)
 		free(tmpspec);
 	}
 
+	/* free all search structures from bottom up */
 	next = current->father;
 	while (next) {
 		next = current->father;
@@ -1057,11 +1342,17 @@ static void clean_all(void)
 	}
 }
 
+/**
+ * Stop the ncurses session
+ */
 static void ncurses_stop()
 {
 	endwin();
 }
 
+/**
+ * Cleanly stop ngp if CTRL+C is intercepted
+ */
 static void sig_handler(int signo)
 {
 	if (signo == SIGINT) {
@@ -1084,16 +1375,24 @@ int main(int argc, char *argv[])
 	struct extension_list	*curext = NULL;
 	struct exclude_list	*curexcl= NULL;
 
+	/* this is the mainsearch, our first search structure */
 	current = &mainsearch;
 	init_searchstruct(&mainsearch);
+
+	/* we need a mutex to synchronize the display and data threads */
 	pthread_mutex_init(&mainsearch.data_mutex, NULL);
+
+	/* get the configuration from /etc/ngprc */
 	editor_cmd = get_config(&curext, &curspec);
+
+	/* parse input arguments */
 	get_args(argc, argv, &curext, &curexcl);
 
 	if (argc - optind < 1 || argc - optind > 2) {
 		usage();
 	}
 
+	/* copy pattern and optional directory in mainsearch structure */
 	for ( ; optind < argc; optind++) {
 		if (!first) {
 			strcpy(mainsearch.pattern, argv[optind]);
@@ -1103,6 +1402,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	/* if a regexp was given, check now that it is valid */
 	if (mainsearch.is_regex && !is_regex_valid(&mainsearch)) {
 		fprintf(stderr, "Bad regexp\n");
 		goto quit;
@@ -1110,8 +1410,10 @@ int main(int argc, char *argv[])
 
 	signal(SIGINT, sig_handler);
 
+	/* initialize the entries array for the mainsearch */
 	mainsearch.entries = (struct entry *) calloc(mainsearch.size, sizeof(struct entry));
 
+	/* create the data thread, main is now the display thread the user interacts with */
 	if (pthread_create(&pid, NULL, &lookup_thread, &mainsearch)) {
 		fprintf(stderr, "ngp: cannot create thread");
 		clean_search(&mainsearch);
