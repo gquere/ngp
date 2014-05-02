@@ -34,6 +34,8 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include <pthread.h>
 #include <ctype.h>
 #include <regex.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 
 #define CURSOR_UP	'k'
 #define CURSOR_DOWN	'j'
@@ -761,18 +763,28 @@ static char * regex(const char *line, const char *pattern)
 
 static int parse_file(const char *file, const char *pattern)
 {
-	FILE *f;
-	char line[LINE_MAX];
+	int f;
+	char *p, *start, *endline;
+	struct stat sb;
 	char full_line[LINE_MAX];
 	int first;
 	int line_number;
 	char * (*parser)(const char *, const char*);
 	errno = 0;
 
-	f = fopen(file, "r");
-	if (f == NULL) {
+	f = open(file, O_RDONLY);
+	if (f == -1) {
 		return -1;
 	}
+
+	if (fstat(f, &sb) < 0)
+		return -1;
+
+	p = mmap(0, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, f, 0);
+	if (p == MAP_FAILED)
+		return -1;
+
+	close(f);
 
 	if (mainsearch_attr.is_insensitive == 0) {
 		parser = strstr;
@@ -786,24 +798,27 @@ static int parse_file(const char *file, const char *pattern)
 
 	first = 1;
 	line_number = 1;
-	while (fgets(line, sizeof(line), f)) {
-		if (parser(line, pattern) != NULL) {
-			if (first) {
+	start = p;
+
+	while ((endline = strchr(p, '\n'))) {
+		*endline = '\0';
+		if (__builtin_expect(!!(parser(p, pattern) != NULL), 0)) {
+			if (__builtin_expect(first, 0)) {
 				mainsearch_add_file(file);
 				first = 0;
 			}
-			if (line[strlen(line) - 2] == '\r')
-				line[strlen(line) - 2] = '\0';
-			snprintf(full_line, LINE_MAX, "%d:%s", line_number, line);
+			if (__builtin_expect(!!(p[strlen(p) - 2] == '\r'), 0))
+				p[strlen(p) - 2] = '\0';
+			snprintf(full_line, LINE_MAX, "%d:%s", line_number, p);
 			mainsearch_add_line(full_line);
 		}
-		/* check line has a \n */
-		//FIXME this is ugly
-		if (line[strlen(line) - 1] == '\n')
-			line_number++;
-		memset(line, 0, LINE_MAX);
+		p = endline + 1;
+		line_number++;
 	}
-	fclose(f);
+
+	if (munmap(start, sb.st_size) < 0)
+		return -1;
+
 	return 0;
 }
 
