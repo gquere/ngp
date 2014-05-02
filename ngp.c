@@ -618,6 +618,7 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
 	int file_index;
 	pthread_mutex_t *mutex;
 	char *sanitized_pattern;
+	int retval;
 
 	/* vim doesn't like naked / and ' characters, so escape them */
 	sanitized_pattern = vim_sanitize(pattern);
@@ -636,7 +637,8 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
 			sanitized_pattern,
 			mainsearch_attr.is_insensitive ? "\\c" : "");
 	}
-	system(command);
+	retval = system(command);
+	S_VAR_NOT_USED(retval);
 	free(sanitized_pattern);
 }
 
