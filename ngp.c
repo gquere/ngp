@@ -513,7 +513,7 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
 /*************************** DISPLAY ******************************************/
 static void print_line(int *y, char *line)
 {
-	char *pos, *buf;
+	char *pos, *buf, *pattern, *ptr;
 	int length = 0;
 
 	/* line number */
@@ -525,6 +525,18 @@ static void print_line(int *y, char *line)
 	length = strlen(pos) + 1;
 	attron(COLOR_PAIR(1));
 	mvprintw(*y, length, "%s", line + length);
+
+	pattern = strcasestr(line + length, current->pattern);
+	ptr = line + length;
+
+	move(*y, length);
+	while (ptr != pattern) {
+		addch(*ptr);
+		ptr++;
+	}
+
+	attron(COLOR_PAIR(4));
+	printw("%s", current->pattern);
 }
 
 static void print_file(int *y, char *line)
