@@ -511,30 +511,26 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
 
 
 /*************************** DISPLAY ******************************************/
-static void printl(int *y, const char *line)
+static void print_line(int *y, char *line)
 {
-	int crop = COLS;
-	char cropped_line[PATH_MAX];
-	char filtered_line[PATH_MAX];
-	char *pos;
-	char *buf;
-	int length=0;
+	char *pos, *buf;
+	int length = 0;
 
-	strncpy(cropped_line, line, crop);
-	cropped_line[COLS] = '\0';
+	/* line number */
+	pos = strtok_r(line, ":", &buf);
+	attron(COLOR_PAIR(2));
+	mvprintw(*y, 0, "%s:", pos);
 
-	if (isdigit(cropped_line[0])) {
-		pos = strtok_r(cropped_line, ":", &buf);
-		attron(COLOR_PAIR(2));
-		mvprintw(*y, 0, "%s:", pos);
-		length = strlen(pos) + 1;
-		attron(COLOR_PAIR(1));
-		mvprintw(*y, length, "%s", cropped_line + length);
-	} else {
-		attron(COLOR_PAIR(5));
-		mvprintw(*y, 0, "%s", cropped_line,
-			remove_double_appearance(cropped_line, '/', filtered_line));
-	}
+	/* line */
+	length = strlen(pos) + 1;
+	attron(COLOR_PAIR(1));
+	mvprintw(*y, length, "%s", line + length);
+}
+
+static void print_file(int *y, char *line)
+{
+	attron(COLOR_PAIR(5));
+	mvprintw(*y, 0, "%s", line);
 }
 
 static void display_entry(int *y, int *index, int color)
@@ -545,14 +541,14 @@ static void display_entry(int *y, int *index, int color)
 		if (!is_file(*index, current)) {
 			if (color == 1) {
 				attron(A_REVERSE);
-				printl(y, current->entries[*index].data);
+				print_line(y, current->entries[*index].data);
 				attroff(A_REVERSE);
 			} else {
-				printl(y, current->entries[*index].data);
+				print_line(y, current->entries[*index].data);
 			}
 		} else {
 			attron(A_BOLD);
-			printl(y, remove_double_appearance(current->entries[*index].data, '/', filtered_line));
+			print_file(y, remove_double_appearance(current->entries[*index].data, '/', filtered_line));
 			attroff(A_BOLD);
 		}
 	}
