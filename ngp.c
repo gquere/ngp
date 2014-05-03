@@ -29,7 +29,6 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include <ncurses.h>
 #include <menu.h>
 #include <signal.h>
-#include <libconfig.h>
 #include <sys/stat.h>
 #include <pthread.h>
 #include <ctype.h>
@@ -140,34 +139,6 @@ enum colors {
 
 /*************************** INIT *********************************************/
 /**
- * Find ngprc that contains the local static config and place its content in
- * a config structure
- *
- * @param cfg	structure to write local static config into
- */
-static void configuration_init(config_t *cfg)
-{
-	char *user_name;
-	char user_ngprc[PATH_MAX];
-
-	config_init(cfg);
-
-	user_name = getenv("USER");
-	snprintf(user_ngprc, PATH_MAX, "/home/%s/%s",
-		user_name, ".ngprc");
-
-	if (config_read_file(cfg, user_ngprc))
-		return;
-
-	if (!config_read_file(cfg, "/etc/ngprc")) {
-		fprintf(stderr, "error in /etc/ngprc\n");
-		fprintf(stderr, "Configuration file has not been found\n");
-		config_destroy(cfg);
-		exit(1);
-	}
-}
-
-/**
  * Initialize a seach structure with default values
  *
  * @param searchstruct	new search structure to init
@@ -220,16 +191,16 @@ static void ncurses_init()
 static const char * get_config(struct extension_list **curext,
 		struct specific_files **curspec)
 {
-	char *ptr;
-	char *buf;
-	config_t cfg;
+	FILE *config;
+	char configline[256];
+	char *env_editor = NULL;
+	char *ptr, *ptr_env;
+	char *start, *end;
+	char *editor_cmd = NULL;
 	const char *specific_files;
 	const char *extensions;
 	struct specific_files *tmpspec;
 	struct extension_list *tmpext;
-	char *env_editor = NULL;
-	char *ptr_env;
-	const char *editor_cmd;
 
 	/* get EDITOR environment variable */
 	env_editor = getenv("EDITOR");
@@ -240,58 +211,76 @@ static const char * get_config(struct extension_list **curext,
 		ptr_env = "vim";
 	}
 
-	/* grab editor string from /etc/ngprc */
-	configuration_init(&cfg);
-	if (!config_lookup_string(&cfg, ptr_env, &editor_cmd)) {
-		fprintf(stderr, "ngprc: no editorcmd string found for %s !\n", ptr_env);
-		fprintf(stderr, "please submit a bug for ngp to support your editor\n");
-		config_lookup_string(&cfg, "vim", &editor_cmd);
-	}
-
-	/* grab list of specific files from /etc/ngprc */
-	if (!config_lookup_string(&cfg, "files", &specific_files)) {
-		fprintf(stderr, "ngprc: no files string found!\n");
+	/* open config file */
+	config = fopen("/etc/ngprc", "r");
+	if (!config)
+		config = fopen("./ngprc", "r");
+	if (!config) {
+		fprintf(stderr, "Failed finding ngprc config file\n");
 		exit(-1);
 	}
 
-	/* get specific files names from configuration */
-	ptr = strtok_r((char *) specific_files, " ", &buf);
-	while (ptr != NULL) {
-		tmpspec = malloc(sizeof(struct specific_files));
-		if (!mainsearch_attr.firstspec) {
-			mainsearch_attr.firstspec = tmpspec;
-		} else {
-			(*curspec)->next = tmpspec;
+	/* parse config file */
+	while (fgets(configline, 256, config)) {
+		if (!strchr(configline, ';'))
+			continue;
+
+		/* editor string contains system command for editor */
+		if (strstr(configline, ptr_env)) {
+			start = strchr(configline, '"') + 1;
+			end = strchr(start, '"');
+			end[0] = 0;
+			editor_cmd = strdup(start);
 		}
 
-		strncpy(tmpspec->spec, ptr, LINE_MAX);
-		tmpspec->next = NULL;
-		*curspec = tmpspec;
-		ptr = strtok_r(NULL, " ", &buf);
-	}
+		/* files is the list of special files to search */
+		if (strstr(configline, "files")) {
+			start = strchr(configline, '"') + 1;
+			end = strchr(start, '"');
+			end[0] = 0;
 
-	/* get files extensions from configuration */
-	if (!config_lookup_string(&cfg, "extensions", &extensions)) {
-		fprintf(stderr, "ngprc: no extensions string found!\n");
-		exit(-1);
-	}
+			ptr = strtok_r((char *) specific_files, " ", &start);
+			while (ptr != NULL) {
+				tmpspec = malloc(sizeof(struct specific_files));
+				if (!mainsearch_attr.firstspec) {
+					mainsearch_attr.firstspec = tmpspec;
+				} else {
+					(*curspec)->next = tmpspec;
+				}
 
-	ptr = strtok_r((char *) extensions, " ", &buf);
-	while (ptr != NULL) {
-		tmpext = malloc(sizeof(struct extension_list));
-		if (!mainsearch_attr.firstext) {
-			mainsearch_attr.firstext = tmpext;
-		} else {
-			(*curext)->next = tmpext;
+				strncpy(tmpspec->spec, ptr, LINE_MAX);
+				tmpspec->next = NULL;
+				*curspec = tmpspec;
+				ptr = strtok_r(NULL, " ", &start);
+			}
 		}
 
-		strncpy(tmpext->ext, ptr, LINE_MAX);
-		tmpext->next = NULL;
-		*curext = tmpext;
-		ptr = strtok_r(NULL, " ", &buf);
+		/* extensions is the list of file types to search */
+		if (strstr(configline, "extensions")) {
+			start = strchr(configline, '"') + 1;
+			end = strchr(start, '"');
+			end[0] = 0;
+
+			ptr = strtok_r((char *) extensions, " ", &start);
+			while (ptr != NULL) {
+				tmpext = malloc(sizeof(struct extension_list));
+				if (!mainsearch_attr.firstext) {
+					mainsearch_attr.firstext = tmpext;
+				} else {
+					(*curext)->next = tmpext;
+				}
+
+				strncpy(tmpext->ext, ptr, LINE_MAX);
+				tmpext->next = NULL;
+				*curext = tmpext;
+				ptr = strtok_r(NULL, " ", &start);
+			}
+		}
 	}
 
-	return editor_cmd;
+	fclose(config);
+
+	return (const char *) editor_cmd;
 }
 
 //FIXME: move to utils
