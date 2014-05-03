@@ -1372,6 +1372,14 @@ static void sig_handler(int signo)
 	}
 }
 
+/**
+ * Cleanly exit ngp
+ */
+static void exit_ngp(void)
+{
+	ncurses_stop();
+	clean_all();
+}
 
 int main(int argc, char *argv[])
 {
@@ -1383,6 +1391,9 @@ int main(int argc, char *argv[])
 	struct specific_files	*curspec = NULL;
 	struct extension_list	*curext = NULL;
 	struct exclude_list	*curexcl= NULL;
+
+	/* set the exit function for main */
+	atexit(exit_ngp);
 
 	/* this is the mainsearch, our first search structure */
 	current = &mainsearch;
@@ -1414,7 +1425,7 @@ int main(int argc, char *argv[])
 	/* if a regexp was given, check now that it is valid */
 	if (mainsearch.is_regex && !is_regex_valid(&mainsearch)) {
 		fprintf(stderr, "Bad regexp\n");
-		goto quit;
+		exit(-1);
 	}
 
 	signal(SIGINT, sig_handler);
@@ -1480,7 +1491,7 @@ int main(int argc, char *argv[])
 			break;
 		case QUIT:
 			if (current->father == NULL) {
-				goto quit;
+				exit(-1);
 			} else {
 				tmp = current->father;
 				clean_search(current);
@@ -1501,14 +1512,11 @@ int main(int argc, char *argv[])
 
 		synchronized(mainsearch.data_mutex) {
 			if (mainsearch.status == 0 && mainsearch.nbentry == 0) {
-				goto quit;
+				exit(0);
 			}
 		}
 	}
 
-quit:
-	ncurses_stop();
-	clean_all();
 	return 0;
 }
 
