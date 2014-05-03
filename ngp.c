@@ -667,6 +667,11 @@ static void print_line(int *y, char *line)
 
 	/* find pattern to colorize */
 	pattern = strcasestr(line + length, current->pattern);
+
+	/* might be that the string is too long */
+	if (!pattern)
+		return;
+
 	ptr = line + length;
 	move(*y, length);
 
@@ -1007,12 +1012,16 @@ static int parse_file(const char *file, const char *pattern)
 		return -1;
 	}
 
-	if (fstat(f, &sb) < 0)
+	if (fstat(f, &sb) < 0) {
+		close(f);
 		return -1;
+	}
 
 	p = mmap(0, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, f, 0);
-	if (p == MAP_FAILED)
+	if (p == MAP_FAILED) {
+		close(f);
 		return -1;
+	}
 
 	close(f);
 
