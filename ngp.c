@@ -128,6 +128,15 @@ static pthread_t		pid;
 
 static void usage(void);
 
+/* colors used by ncurse */
+enum colors {
+	normal = 1,
+	yellow,
+	red,
+	magenta,
+	green,
+};
+
 
 /*************************** INIT *********************************************/
 /**
@@ -189,11 +198,11 @@ static void ncurses_init()
 	nodelay(stdscr, TRUE);
 	start_color();
 	use_default_colors();
-	init_pair(1, -1, -1);
-	init_pair(2, COLOR_YELLOW, -1);
-	init_pair(3, COLOR_RED, -1);
-	init_pair(4, COLOR_MAGENTA, -1);
-	init_pair(5, COLOR_GREEN, -1);
+	init_pair(normal, -1, -1);
+	init_pair(yellow, COLOR_YELLOW, -1);
+	init_pair(red, COLOR_RED, -1);
+	init_pair(magenta, COLOR_MAGENTA, -1);
+	init_pair(green, COLOR_GREEN, -1);
 	curs_set(0);
 }
 
@@ -657,12 +666,12 @@ static void print_line(int *y, char *line)
 
 	/* line number */
 	pos = strtok_r(line, ":", &buf);
-	attron(COLOR_PAIR(2));
+	attron(COLOR_PAIR(yellow));
 	mvprintw(*y, 0, "%s:", pos);
 
 	/* line */
 	length = strlen(pos) + 1;
-	attron(COLOR_PAIR(1));
+	attron(COLOR_PAIR(normal));
 	mvprintw(*y, length, "%s", line + length);
 
 	/* find pattern to colorize */
@@ -681,7 +690,7 @@ static void print_line(int *y, char *line)
 	}
 
 	/* print colorized pattern on top of current line */
-	attron(COLOR_PAIR(4));
+	attron(COLOR_PAIR(red));
 	printw("%s", current->pattern);
 }
 
@@ -693,7 +702,7 @@ static void print_line(int *y, char *line)
  */
 static void print_file(int *y, char *file)
 {
-	attron(COLOR_PAIR(5));
+	attron(COLOR_PAIR(green));
 	mvprintw(*y, 0, "%s", file);
 }
 
@@ -877,7 +886,7 @@ static void display_status(void)
 	static int i = 0;
 
 	char nbhits[15];
-	attron(COLOR_PAIR(1));
+	attron(COLOR_PAIR(normal));
 	if (mainsearch.status)
 		mvaddstr(0, COLS - 1, rollingwheel[++i%4]);
 	else
