@@ -61,7 +61,7 @@ pthread_mutex_unlock(mutex), mutex = 0)
 /* stores an entry, a file or a line */
 struct entry {
 	char *data;
-	char isfile:1;
+	int isfile:1;
 };
 
 /* contains the directories to exclude from search */
