@@ -648,10 +648,13 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
  * @param y	vertical position the line should be written at
  * @param line	line to write
  */
-static void print_line(int *y, char *line)
+static void print_line(int *y, char *line_orig)
 {
 	char *pos, *buf, *pattern, *ptr;
+	char *line;
 	int length = 0;
+
+	line = strdup(line_orig);
 
 	/* line number */
 	pos = strtok_r(line, ":", &buf);
@@ -667,8 +670,10 @@ static void print_line(int *y, char *line)
 	pattern = strcasestr(line + length, current->pattern);
 
 	/* might be that the string is too long */
-	if (!pattern)
+	if (!pattern) {
+		free(line);
 		return;
+	}
 
 	ptr = line + length;
 	move(*y, length);
@@ -681,6 +686,7 @@ static void print_line(int *y, char *line)
 	/* print colorized pattern on top of current line */
 	attron(COLOR_PAIR(red));
 	printw("%s", current->pattern);
+	free(line);
 }
 
 /**
