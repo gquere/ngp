@@ -123,7 +123,7 @@ struct mainsearch_attr {
 static struct search		mainsearch;
 static struct mainsearch_attr	mainsearch_attr;
 static struct search		*current;
-static pthread_t		pid;
+static pthread_t		pid = 0;
 
 static void usage(void);
 
@@ -323,6 +323,7 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
 		switch (opt) {
 		case 'h': /* display help */
 			usage();
+			exit(-1);
 			break;
 		case 'i': /* insensitive case */
 			mainsearch_attr.is_insensitive = 1;
@@ -382,6 +383,7 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
 			*curexcl = tmpexcl;
 			break;
 		default:
+			/* shouldn't get here anyways */
 			usage();
 			exit(-1);
 			break;
@@ -1365,26 +1367,27 @@ static void ncurses_stop()
 	endwin();
 }
 
+/*
+ * Cleanly exit ngp
+ * THIS FUNCTION IS ATEXIT !!
+ */
+static void exit_ngp(void)
+{
+	if (pid)
+		pthread_kill(pid, SIGINT);
+	ncurses_stop();
+	clean_all();
+}
+
 /**
  * Cleanly stop ngp if CTRL+C is intercepted
  */
 static void sig_handler(int signo)
 {
 	if (signo == SIGINT) {
-		pthread_kill(pid, SIGINT);
-		ncurses_stop();
-		clean_all();
+		/* do note that at this point atexit is registered */
 		exit(-1);
 	}
-}
-
-/**
- * Cleanly exit ngp
- */
-static void exit_ngp(void)
-{
-	ncurses_stop();
-	clean_all();
 }
 
 int main(int argc, char *argv[])
@@ -1404,6 +1407,7 @@ int main(int argc, char *argv[])
 	/* this is the mainsearch, our first search structure */
 	current = &mainsearch;
 	init_searchstruct(&mainsearch);
+	memset(&mainsearch_attr, 0, sizeof(struct mainsearch_attr));
 
 	/* we need a mutex to synchronize the display and data threads */
 	pthread_mutex_init(&mainsearch.data_mutex, NULL);
@@ -1416,6 +1420,7 @@ int main(int argc, char *argv[])
 
 	if (argc - optind < 1 || argc - optind > 2) {
 		usage();
+		exit(-1);
 	}
 
 	/* copy pattern and optional directory in mainsearch structure */
