@@ -120,7 +120,7 @@ struct mainsearch_attr {
 	struct extension_list	*firstext;
 };
 
-static struct search		mainsearch;
+static struct search		*mainsearch;
 static struct mainsearch_attr	mainsearch_attr;
 static struct search		*current;
 static pthread_t		pid = 0;
@@ -363,7 +363,7 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
 			mainsearch_attr.raw = 1;
 			break;
 		case 'e': /* pattern is a regexp */
-			mainsearch.is_regex = 1;
+			mainsearch->is_regex = 1;
 			break;
 		case 'f': /* follow symlinks */
 			mainsearch_attr.follow_symlinks = 1;
@@ -626,7 +626,7 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
 	/* find the file associated with the line */
 	file_index = find_file(index);
 
-	synchronized(mainsearch.data_mutex) {
+	synchronized(mainsearch->data_mutex) {
 		/* fill the editor system command with our variables */
 		strcpy(line_copy, current->entries[index].data);
 		snprintf(command, sizeof(command), editor_cmd,
@@ -884,7 +884,7 @@ static void display_status(void)
 
 	char nbhits[15];
 	attron(COLOR_PAIR(normal));
-	if (mainsearch.status)
+	if (mainsearch->status)
 		mvaddstr(0, COLS - 1, rollingwheel[++i%4]);
 	else
 		mvaddstr(0, COLS - 5, "Done.");
@@ -918,12 +918,12 @@ static void mainsearch_add_file(const char *file)
 {
 	char *new_file;
 
-	check_alloc(&mainsearch, 500);
+	check_alloc(mainsearch, 500);
 	new_file = malloc(PATH_MAX * sizeof(char));
 	strncpy(new_file, file, PATH_MAX);
-	mainsearch.entries[mainsearch.nbentry].data = new_file;
-	mainsearch.entries[mainsearch.nbentry].isfile = 1;
-	mainsearch.nbentry++;
+	mainsearch->entries[mainsearch->nbentry].data = new_file;
+	mainsearch->entries[mainsearch->nbentry].isfile = 1;
+	mainsearch->nbentry++;
 }
 
 /**
@@ -935,18 +935,18 @@ static void mainsearch_add_line(const char *line)
 {
 	char *new_line;
 
-	check_alloc(&mainsearch, 500);
+	check_alloc(mainsearch, 500);
 	new_line = malloc(LINE_MAX * sizeof(char));
 	strncpy(new_line, line, LINE_MAX);
-	mainsearch.entries[mainsearch.nbentry].data = new_line;
-	mainsearch.entries[mainsearch.nbentry].isfile = 0;
-	mainsearch.nbentry++;
-	mainsearch.nb_lines++;
+	mainsearch->entries[mainsearch->nbentry].data = new_line;
+	mainsearch->entries[mainsearch->nbentry].isfile = 0;
+	mainsearch->nbentry++;
+	mainsearch->nb_lines++;
 
 	/* display entries if we're not filled yet on first screen */
-	if (mainsearch.nbentry <= (unsigned) (current->index + LINES)
-			&& current == &mainsearch)
-		display_entries(&mainsearch.index, &mainsearch.cursor);
+	if (mainsearch->nbentry <= (unsigned) (current->index + LINES)
+			&& current == mainsearch)
+		display_entries(&mainsearch->index, &mainsearch->cursor);
 }
 
 
@@ -1089,14 +1089,14 @@ static void lookup_file(const char *file, const char *pattern)
 
 	/* if the search is of type raw, all file are to be parsed */
 	if (mainsearch_attr.raw) {
-		synchronized(mainsearch.data_mutex)
+		synchronized(mainsearch->data_mutex)
 			parse_file(file, pattern);
 		return;
 	}
 
 	/* check if file is a specific file */
 	if (is_specific_file(file)) {
-		synchronized(mainsearch.data_mutex)
+		synchronized(mainsearch->data_mutex)
 			parse_file(file, pattern);
 		return;
 	}
@@ -1105,7 +1105,7 @@ static void lookup_file(const char *file, const char *pattern)
 	curext = mainsearch_attr.firstext;
 	while (curext) {
 		if (!strcmp(curext->ext, file + strlen(file) - strlen(curext->ext))) {
-				synchronized(mainsearch.data_mutex)
+				synchronized(mainsearch->data_mutex)
 				parse_file(file, pattern);
 			break;
 		}
@@ -1315,7 +1315,7 @@ static void clean_search(struct search *search)
 
 	/* free the rest of the search structure */
 	free(search->regex);
-//	free(search); //wont work cuz mainsearch ain't no pointer yo
+	free(search);
 }
 
 /**
@@ -1405,12 +1405,15 @@ int main(int argc, char *argv[])
 	atexit(exit_ngp);
 
 	/* this is the mainsearch, our first search structure */
-	current = &mainsearch;
-	init_searchstruct(&mainsearch);
+	mainsearch = malloc(sizeof(struct search));
+	if (!mainsearch)
+		exit(-1);
+	current = mainsearch;
+	init_searchstruct(mainsearch);
 	memset(&mainsearch_attr, 0, sizeof(struct mainsearch_attr));
 
 	/* we need a mutex to synchronize the display and data threads */
-	pthread_mutex_init(&mainsearch.data_mutex, NULL);
+	pthread_mutex_init(&mainsearch->data_mutex, NULL);
 
 	/* get the configuration from /etc/ngprc */
 	editor_cmd = get_config(&curext, &curspec);
@@ -1426,15 +1429,15 @@ int main(int argc, char *argv[])
 	/* copy pattern and optional directory in mainsearch structure */
 	for ( ; optind < argc; optind++) {
 		if (!first) {
-			strcpy(mainsearch.pattern, argv[optind]);
+			strcpy(mainsearch->pattern, argv[optind]);
 			first = 1;
 		} else {
-			strcpy(mainsearch.directory, argv[optind]);
+			strcpy(mainsearch->directory, argv[optind]);
 		}
 	}
 
 	/* if a regexp was given, check now that it is valid */
-	if (mainsearch.is_regex && !is_regex_valid(&mainsearch)) {
+	if (mainsearch->is_regex && !is_regex_valid(mainsearch)) {
 		fprintf(stderr, "Bad regexp\n");
 		exit(-1);
 	}
@@ -1442,44 +1445,44 @@ int main(int argc, char *argv[])
 	signal(SIGINT, sig_handler);
 
 	/* initialize the entries array for the mainsearch */
-	mainsearch.entries = (struct entry *) calloc(mainsearch.size, sizeof(struct entry));
+	mainsearch->entries = (struct entry *) calloc(mainsearch->size, sizeof(struct entry));
 
 	/* create the data thread, main is now the display thread the user interacts with */
-	if (pthread_create(&pid, NULL, &lookup_thread, &mainsearch)) {
+	if (pthread_create(&pid, NULL, &lookup_thread, mainsearch)) {
 		fprintf(stderr, "ngp: cannot create thread");
-		clean_search(&mainsearch);
+		clean_search(mainsearch);
 		exit(-1);
 	}
 
 	ncurses_init();
 
-	synchronized(mainsearch.data_mutex)
-		display_entries(&mainsearch.index, &mainsearch.cursor);
+	synchronized(mainsearch->data_mutex)
+		display_entries(&mainsearch->index, &mainsearch->cursor);
 
 	while ((ch = getch())) {
 		switch(ch) {
 		case KEY_RESIZE:
-			synchronized(mainsearch.data_mutex)
+			synchronized(mainsearch->data_mutex)
 				resize(&current->index, &current->cursor);
 			break;
 		case CURSOR_DOWN:
 		case KEY_DOWN:
-			synchronized(mainsearch.data_mutex)
+			synchronized(mainsearch->data_mutex)
 				cursor_down(&current->index, &current->cursor);
 			break;
 		case CURSOR_UP:
 		case KEY_UP:
-			synchronized(mainsearch.data_mutex)
+			synchronized(mainsearch->data_mutex)
 				cursor_up(&current->index, &current->cursor);
 			break;
 		case KEY_PPAGE:
 		case PAGE_UP:
-			synchronized(mainsearch.data_mutex)
+			synchronized(mainsearch->data_mutex)
 				page_up(&current->index, &current->cursor);
 			break;
 		case KEY_NPAGE:
 		case PAGE_DOWN:
-			synchronized(mainsearch.data_mutex)
+			synchronized(mainsearch->data_mutex)
 				page_down(&current->index, &current->cursor);
 			break;
 		case '/':
@@ -1517,12 +1520,12 @@ int main(int argc, char *argv[])
 
 		usleep(10000);
 		refresh();
-		synchronized(mainsearch.data_mutex) {
+		synchronized(mainsearch->data_mutex) {
 			display_status();
 		}
 
-		synchronized(mainsearch.data_mutex) {
-			if (mainsearch.status == 0 && mainsearch.nbentry == 0) {
+		synchronized(mainsearch->data_mutex) {
+			if (mainsearch->status == 0 && mainsearch->nbentry == 0) {
 				exit(0);
 			}
 		}
