@@ -917,10 +917,13 @@ static inline void check_alloc(struct search *toinc, int size)
 static void mainsearch_add_file(const char *file)
 {
 	char *new_file;
+	size_t file_size;
+
+	file_size = strlen(file) < 256 ? strlen(file) + 1 : 256;
 
 	check_alloc(mainsearch, 500);
-	new_file = malloc(PATH_MAX * sizeof(char));
-	strncpy(new_file, file, PATH_MAX);
+	new_file = malloc(file_size * sizeof(char));
+	strncpy(new_file, file, file_size);
 	mainsearch->entries[mainsearch->nbentry].data = new_file;
 	mainsearch->entries[mainsearch->nbentry].isfile = 1;
 	mainsearch->nbentry++;
@@ -934,10 +937,13 @@ static void mainsearch_add_file(const char *file)
 static void mainsearch_add_line(const char *line)
 {
 	char *new_line;
+	size_t line_size;
+
+	line_size = strlen(line) < 256 ? strlen(line) + 1 : 256;
 
 	check_alloc(mainsearch, 500);
-	new_line = malloc(LINE_MAX * sizeof(char));
-	strncpy(new_line, line, LINE_MAX);
+	new_line = malloc(line_size * sizeof(char));
+	strncpy(new_line, line, line_size);
 	mainsearch->entries[mainsearch->nbentry].data = new_line;
 	mainsearch->entries[mainsearch->nbentry].isfile = 0;
 	mainsearch->nbentry++;
@@ -1264,8 +1270,8 @@ static struct search * subsearch(struct search *father)
 				free(new_data);
 
 			/* prepare entry.data but don't add it yet */
-			new_data = malloc(LINE_MAX * sizeof(char));
-			strncpy(new_data, father->entries[i].data, LINE_MAX);
+			new_data = malloc((strlen(father->entries[i].data) + 1) * sizeof(char));
+			strncpy(new_data, father->entries[i].data, (strlen(father->entries[i].data) + 1));
 			orphan_file = 1;
 		} else if (regex(father->entries[i].data, child->pattern)) {
 			//check_alloc(child, 100); //FIXME this should work ...
@@ -1281,8 +1287,8 @@ static struct search * subsearch(struct search *father)
 				orphan_file = 0;
 			}
 			/* now add line */
-			new_data = malloc(LINE_MAX * sizeof(char));
-			strncpy(new_data, father->entries[i].data, LINE_MAX);
+			new_data = malloc((strlen(father->entries[i].data) + 1) * sizeof(char));
+			strncpy(new_data, father->entries[i].data, (strlen(father->entries[i].data) + 1));
 			child->entries[child->nbentry].data = new_data;
 			child->entries[child->nbentry].isfile = 0;
 			child->nb_lines++;
