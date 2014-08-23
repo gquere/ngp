@@ -100,6 +100,8 @@ struct search {
 	/* search */
 	char directory[PATH_MAX];
 	char pattern[LINE_MAX];
+	int d, hp; // Rabin-Karp parameters
+	int psize; // pattern size used by RK
 	unsigned int is_regex:1;
 	regex_t *regex;
 
@@ -652,7 +654,7 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
  */
 static void print_line(int *y, char *line_orig)
 {
-	char *pos, *buf, *pattern, *ptr;
+	char *pos, *buf = NULL, *pattern, *ptr;
 	char *line;
 	int length = 0;
 
@@ -888,6 +890,7 @@ static void display_status(void)
 		mvaddstr(0, COLS - 1, rollingwheel[++i%4]);
 	else
 		mvaddstr(0, COLS - 5, "Done.");
+
 	snprintf(nbhits, 15, "Hits: %d", current->nb_lines);
 	mvaddstr(1, COLS - (int)(strchr(nbhits, '\0') - nbhits), nbhits);
 }
@@ -1000,6 +1003,64 @@ static char * regex(const char *line, const char *pattern)
 }
 
 /**
+ * Rolling hash function used for this instance of Rabin-Karp
+ */
+#define REHASH(a,b,h) ((((h) - (a)*mainsearch->d) << 1) + b)
+
+/**
+ * Compute Rabin-Karp parameters (shift d and hash(pattern)
+ *
+ * @param pattern	search pattern
+ */
+static void pre_rabin_karp(const char *pattern)
+{
+	int i;
+	int psize;
+
+	psize = strlen(pattern);
+
+	/* compute shift */
+	mainsearch->d = 1 << (psize - 1);
+
+	/* compute hash(pattern) */
+	for (mainsearch->hp = i = 0; i < psize; i++)
+		mainsearch->hp = (mainsearch->hp << 1) + pattern[i];
+
+	mainsearch->psize = psize;
+}
+
+/**
+ * Rabin-Karp algorithm: use a rolling hash over the text to fasten
+ * the comparison computation
+ *
+ * @param text		Haystack
+ * @param pattern	Needle
+ * @return		pointer to match or NULL
+ */
+static char * rabin_karp(const char *text, const char *pattern)
+{
+	int tsize;
+	int ht;
+	int i;
+
+	tsize = strlen(text);
+
+	/* compute hash(text) at position 0 */
+	for (ht = i = 0; i < mainsearch->psize; i++)
+		ht = (ht << 1) + text[i];
+
+	for (i = 0; i <= tsize - mainsearch->psize; i++) {
+		if (ht == mainsearch->hp) /* got a hash match, but it could be a collision */
+			if (!memcmp(pattern, text + i, mainsearch->psize))
+				return (char *) text + i;
+		/* compute rolling hash for next position */
+		ht = REHASH(text[i], text[i + mainsearch->psize], ht);
+	}
+
+	return NULL;
+}
+
+/**
  * Core of ngp, parses a file and adds the file and its entries to the local
  * array if any matches are found.
  *
@@ -1039,7 +1100,7 @@ static int parse_file(const char *file, const char *pattern)
 
 	/* position function pointer on appropriate parser */
 	if (mainsearch_attr.is_insensitive == 0) {
-		parser = strstr;
+		parser = rabin_karp;
 	} else {
 		parser = strcasestr;
 	}
@@ -1447,6 +1508,8 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Bad regexp\n");
 		exit(-1);
 	}
+	/* compute rabin-karp parameters on pattern */
+	pre_rabin_karp(mainsearch->pattern);
 
 	signal(SIGINT, sig_handler);
 
