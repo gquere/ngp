@@ -98,6 +98,7 @@ struct search {
 	unsigned int status:1;
 
 	/* search */
+	char * (*parser)(const char *, const char*, int);
 	char directory[PATH_MAX];
 	char pattern[LINE_MAX];
 	int d, hp; // Rabin-Karp parameters
@@ -960,6 +961,17 @@ static void mainsearch_add_line(const char *line)
 
 
 /*************************** PARSING ******************************************/
+/* We need best performance on regular string search, and it receives size
+ * so this function is used to accomodate strcasestr with one more param until
+ * I rewrite it. FIXME :)
+ */
+static char * strcasestr_wrapper(const char *line, const char *pattern, int siz)
+{
+	S_VAR_NOT_USED(siz);
+
+	return strcasestr(line, pattern);
+}
+
 /**
  * Checks if a regexp is valid
  *
@@ -989,11 +1001,12 @@ static int is_regex_valid(struct search *cursearch)
  * @param pattern	not used, since stored in search structure
  * @return		NULL if pattern not found, valid string otherwise
  */
-static char * regex(const char *line, const char *pattern)
+static char * regex(const char *line, const char *pattern, int size)
 {
 	int ret;
-
+	S_VAR_NOT_USED(size);
 	S_VAR_NOT_USED(pattern);
+
 	ret = regexec(current->regex, line, 0, NULL, 0);
 
 	if (ret != REG_NOMATCH)
@@ -1037,13 +1050,10 @@ static void pre_rabin_karp(const char *pattern)
  * @param pattern	Needle
  * @return		pointer to match or NULL
  */
-static char * rabin_karp(const char *text, const char *pattern)
+static inline char * rabin_karp(const char *text, const char *pattern, int tsize)
 {
-	int tsize;
 	int ht;
 	int i;
-
-	tsize = strlen(text);
 
 	/* compute hash(text) at position 0 */
 	for (ht = i = 0; i < mainsearch->psize; i++)
@@ -1076,7 +1086,6 @@ static int parse_file(const char *file, const char *pattern)
 	char full_line[LINE_MAX];
 	int first;
 	int line_number;
-	char * (*parser)(const char *, const char*);
 	errno = 0;
 
 	/* open file using mmap */
@@ -1098,17 +1107,6 @@ static int parse_file(const char *file, const char *pattern)
 
 	close(f);
 
-	/* position function pointer on appropriate parser */
-	if (mainsearch_attr.is_insensitive == 0) {
-		parser = rabin_karp;
-	} else {
-		parser = strcasestr;
-	}
-
-	if (current->is_regex) {
-		parser = regex;
-	}
-
 	first = 1;
 	line_number = 1;
 	start = p;
@@ -1116,7 +1114,7 @@ static int parse_file(const char *file, const char *pattern)
 	/* search the memory mapping for the pattern until EOF */
 	while ((endline = strchr(p, '\n'))) {
 		*endline = '\0';
-		if (__builtin_expect(!!(parser(p, pattern) != NULL), 0)) {
+		if (__builtin_expect(!!(mainsearch->parser(p, pattern, endline - p) != NULL), 0)) {
 			/* if no file has been added yet, do it since a line matches */
 			if (__builtin_expect(first, 0)) {
 				/* add file to the local array */
@@ -1334,7 +1332,7 @@ static struct search * subsearch(struct search *father)
 			new_data = malloc((strlen(father->entries[i].data) + 1) * sizeof(char));
 			strncpy(new_data, father->entries[i].data, (strlen(father->entries[i].data) + 1));
 			orphan_file = 1;
-		} else if (regex(father->entries[i].data, child->pattern)) {
+		} else if (regex(father->entries[i].data, child->pattern, 0)) {
 			//check_alloc(child, 100); //FIXME this should work ...
 			if (child->nbentry%100 >= 98) {
 				child->size += 100;
@@ -1504,12 +1502,20 @@ int main(int argc, char *argv[])
 	}
 
 	/* if a regexp was given, check now that it is valid */
-	if (mainsearch->is_regex && !is_regex_valid(mainsearch)) {
-		fprintf(stderr, "Bad regexp\n");
-		exit(-1);
+	if (mainsearch->is_regex) {
+		/* position function pointer on appropriate parser */
+		mainsearch->parser = regex;
+		if (!is_regex_valid(mainsearch)) {
+			fprintf(stderr, "Bad regexp\n");
+			exit(-1);
+		}
+	} else if (mainsearch_attr.is_insensitive == 0) {
+		/* compute rabin-karp parameters on pattern */
+		mainsearch->parser = rabin_karp;
+		pre_rabin_karp(mainsearch->pattern);
+	} else {
+		mainsearch->parser = strcasestr_wrapper;
 	}
-	/* compute rabin-karp parameters on pattern */
-	pre_rabin_karp(mainsearch->pattern);
 
 	signal(SIGINT, sig_handler);
 
