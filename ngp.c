@@ -639,7 +639,7 @@ static void print_line(int *y, char *line, int line_nb)
 {
 	int number_len;
 	char number[10];
-	char *pattern;
+	char *pattern = NULL;
 	char *ptr;
 
 	/* line number */
@@ -651,18 +651,16 @@ static void print_line(int *y, char *line, int line_nb)
 	attron(COLOR_PAIR(normal));
 	mvprintw(*y, number_len + 1, "%s", line);
 
-	move(*y, number_len + 1);
-
 	if (current->is_regex)
 		return;
 
 	/* find pattern to colorize */
 	ptr = line;
-	pattern = line;
-	// FIXME: could s/if/while but insensitive doesn't like it ?!
-	if ((pattern = strcasestr(ptr, current->pattern))) {
+	move(*y, number_len + 1);
+
+	while ((pattern = strcasestr(ptr, current->pattern))) {
 		/* move by one char until pattern is found */
-		while (ptr != pattern) {
+		while (ptr < pattern) {
 			addch(*ptr);
 			ptr++;
 		}
@@ -671,7 +669,7 @@ static void print_line(int *y, char *line, int line_nb)
 		attron(COLOR_PAIR(red));
 		printw("%s", current->pattern);
 		attron(COLOR_PAIR(normal));
-		ptr += current->psize - 1;
+		ptr += current->psize;
 	}
 }
 
@@ -1385,6 +1383,8 @@ static void * save_thread(void * thnum)
 		worker_res[0] = NULL;
 		worker_res[1] = NULL;
 		munmap(filep.start, filep.size); //FIXME
+
+		/* signal that next file can be processed */
 		sem_post(&new_file_signal);
 	}
 
@@ -1643,6 +1643,7 @@ static struct search * subsearch(struct search *father)
 	father->child = child;
 	child->entries = calloc(100, sizeof(struct entry));
 	strncpy(child->pattern, search, LINE_MAX);
+	child->psize = strlen(child->pattern);
 	free(search);
 
 	if (!is_regex_valid(child))
@@ -1850,6 +1851,7 @@ int main(int argc, char *argv[])
 		//pre_pfs(mainsearch->pattern);
 	} else {
 		mainsearch->parser = strcasestr_wrapper;
+		mainsearch->psize = strlen(mainsearch->pattern);
 	}
 
 	signal(SIGINT, sig_handler);
