@@ -1628,14 +1628,16 @@ static struct search * subsearch(struct search *father)
 	struct search	*child;
 	unsigned int	i;
 	char		*search;
-	bool		orphan_file = 0;
-	char		*new_data;
+	char		*file = NULL;
+	int		save_file = 0;
 
 	search = malloc(LINE_MAX * sizeof(char));
 	memset(search, 0, LINE_MAX);
+
+	/* get regexp */
 	subsearch_window(search);
 
-	/*Verify search is not empty*/
+	/*Verify regexp is not empty*/
 	if (search[0] == 0)
 		return NULL;
 
@@ -1657,32 +1659,24 @@ static struct search * subsearch(struct search *father)
 
 	for (i = 0; i < father->nbentry; i++) {
 		if (is_file(i, father)) {
-			/* previous file had no entries, free it */
-			if (orphan_file)
-				free(new_data);
-
-			/* prepare entry.data but don't add it yet */
-			new_data = malloc((strlen(father->entries[i].data) + 1) * sizeof(char));
-			strncpy(new_data, father->entries[i].data, (strlen(father->entries[i].data) + 1));
-			orphan_file = 1;
+			file = father->entries[i].data;
+			save_file = 1;
 		} else if (regex(father->entries[i].data, child->pattern, 0)) {
-			//check_alloc(child, 100); //FIXME this should work ...
 			if (child->nbentry%100 >= 98) {
 				child->size += 100;
 				child->entries = realloc(child->entries, child->size * sizeof(struct entry));
 			}
+
 			/* file has entries, add it */
-			if (orphan_file) {
-				child->entries[child->nbentry].data = new_data;
+			if (save_file) {
+				child->entries[child->nbentry].data = file;
 				child->entries[child->nbentry].line = 0;
 				child->nbentry++;
-				orphan_file = 0;
+				save_file = 0;
 			}
+
 			/* now add line */
-			//FIXME: NO NEED TO MALLOC HERE JUST POINT TO EXISTING STRING
-			new_data = malloc((strlen(father->entries[i].data) + 1) * sizeof(char));
-			strncpy(new_data, father->entries[i].data, (strlen(father->entries[i].data) + 1));
-			child->entries[child->nbentry].data = new_data;
+			child->entries[child->nbentry].data = father->entries[i].data;
 			child->entries[child->nbentry].line = father->entries[i].line;
 			child->nb_lines++;
 			child->nbentry++;
@@ -1705,15 +1699,15 @@ static void clean_search(struct search *search)
 	unsigned int i;
 
 	/* free the data entries in the array */
-	for (i = 0; i < search->nbentry; i++) {
-		free(search->entries[i].data);
-	}
+	if (search == mainsearch)
+		for (i = 0; i < search->nbentry; i++)
+			free(search->entries[i].data);
 
 	/* free the array */
 	free(search->entries);
 
 	/* free the rest of the search structure */
-	free(search->regex);
+	free(search->regex); //FIXME: doesn't seem to function for children ?!
 	free(search);
 }
 
