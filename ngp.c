@@ -1564,6 +1564,11 @@ static void * lookup_thread(void *arg)
 
 
 	if (isfile(d->directory)) {
+		usleep(500); // simplest way to fix race condition for now
+		/* FIXME: problem is that for single file only we return
+		immediately after parse->file, unset d->status and that
+		stops the threads right when they spawn ...
+		*/
 		parse_file(d->directory);
 	} else {
 		lookup_directory(d->directory);
