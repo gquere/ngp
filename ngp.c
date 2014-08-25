@@ -35,6 +35,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include <regex.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <semaphore.h>
 
 #define CURSOR_UP	'k'
 #define CURSOR_DOWN	'j'
@@ -55,12 +56,13 @@ for(mutex = &MUTEX; \
 mutex && !pthread_mutex_lock(mutex); \
 pthread_mutex_unlock(mutex), mutex = 0)
 
+#define DEBUG_PERF	0
 
 /*************************** DATA STRUCTURES **********************************/
 /* stores an entry, a file or a line */
 struct entry {
 	char *data;
-	int isfile:1;
+	unsigned int line;
 };
 
 /* contains the directories to exclude from search */
@@ -123,13 +125,6 @@ struct mainsearch_attr {
 	struct extension_list	*firstext;
 };
 
-static struct search		*mainsearch;
-static struct mainsearch_attr	mainsearch_attr;
-static struct search		*current;
-static pthread_t		pid = 0;
-
-static void usage(void);
-
 /* colors used by ncurse */
 enum colors {
 	normal = 1,
@@ -138,6 +133,13 @@ enum colors {
 	magenta,
 	green,
 };
+
+static struct search		*mainsearch;
+static struct mainsearch_attr	mainsearch_attr;
+static struct search		*current;
+static pthread_t		pid = 0, pid_w1, pid_w2, pid_s;
+
+static void usage(void);
 
 
 /*************************** INIT *********************************************/
@@ -200,8 +202,8 @@ static const char * get_config(struct extension_list **curext,
 	char *ptr, *ptr_env;
 	char *start, *end;
 	char *editor_cmd = NULL;
-	const char *specific_files;
-	const char *extensions;
+	const char *specific_files = NULL;
+	const char *extensions = NULL;
 	struct specific_files *tmpspec;
 	struct extension_list *tmpext;
 
@@ -405,7 +407,7 @@ static void get_args(int argc, char *argv[], struct extension_list **curext,
  */
 static int is_file(int index, struct search *cursearch)
 {
-	return cursearch->entries[index].isfile;
+	return !cursearch->entries[index].line;
 }
 
 /**
@@ -532,21 +534,6 @@ static char * remove_double_appearance(char *initial, char c, char *final)
 	return final;
 }
 
-/**
- * Extracts the line number from a string when we want to open it
- * and returns the line number to write into the editor command
- *
- * @param line	string to extract line number from
- * @return	line number as a string
- */
-static char * extract_line_number(char *line)
-{
-	char *token;
-	char *buffer;
-	token = strtok_r(line, " :", &buffer);
-	return token;
-}
-
 static void usage(void)
 {
 	fprintf(stderr, "usage: ngp [options]... pattern [directory/file]\n\n");
@@ -616,8 +603,6 @@ static char * vim_sanitize(const char *search_pattern)
 static void open_entry(int index, const char *editor_cmd, const char *pattern)
 {
 	char command[PATH_MAX];
-	char filtered_file_name[PATH_MAX];
-	char line_copy[PATH_MAX];
 	int file_index;
 	pthread_mutex_t *mutex;
 	char *sanitized_pattern;
@@ -631,12 +616,9 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
 
 	synchronized(mainsearch->data_mutex) {
 		/* fill the editor system command with our variables */
-		strcpy(line_copy, current->entries[index].data);
 		snprintf(command, sizeof(command), editor_cmd,
-			extract_line_number(line_copy),
-			remove_double_appearance(
-				current->entries[file_index].data, '/',
-				filtered_file_name),
+			current->entries[index].line,
+			current->entries[file_index].data,
 			sanitized_pattern,
 			mainsearch_attr.is_insensitive ? "\\c" : "");
 	}
@@ -653,45 +635,44 @@ static void open_entry(int index, const char *editor_cmd, const char *pattern)
  * @param y	vertical position the line should be written at
  * @param line	line to write
  */
-static void print_line(int *y, char *line_orig)
+static void print_line(int *y, char *line, int line_nb)
 {
-	char *pos, *buf = NULL, *pattern, *ptr;
-	char *line;
-	int length = 0;
-
-	line = strdup(line_orig);
+	int number_len;
+	char number[10];
+	char *pattern;
+	char *ptr;
 
 	/* line number */
-	pos = strtok_r(line, ":", &buf);
+	number_len = sprintf(number, "%d", line_nb);
 	attron(COLOR_PAIR(yellow));
-	mvprintw(*y, 0, "%s:", pos);
+	mvprintw(*y, 0, "%s:", number);
 
 	/* line */
-	length = strlen(pos) + 1;
 	attron(COLOR_PAIR(normal));
-	mvprintw(*y, length, "%s", line + length);
+	mvprintw(*y, number_len + 1, "%s", line);
+
+	move(*y, number_len + 1);
+
+	if (current->is_regex)
+		return;
 
 	/* find pattern to colorize */
-	pattern = strcasestr(line + length, current->pattern);
+	ptr = line;
+	pattern = line;
+	// FIXME: could s/if/while but insensitive doesn't like it ?!
+	if ((pattern = strcasestr(ptr, current->pattern))) {
+		/* move by one char until pattern is found */
+		while (ptr != pattern) {
+			addch(*ptr);
+			ptr++;
+		}
 
-	/* might be that the string is too long */
-	if (!pattern) {
-		free(line);
-		return;
+		/* print colorized pattern on top of current line */
+		attron(COLOR_PAIR(red));
+		printw("%s", current->pattern);
+		attron(COLOR_PAIR(normal));
+		ptr += current->psize - 1;
 	}
-
-	ptr = line + length;
-	move(*y, length);
-
-	while (ptr != pattern) {
-		addch(*ptr);
-		ptr++;
-	}
-
-	/* print colorized pattern on top of current line */
-	attron(COLOR_PAIR(red));
-	printw("%s", current->pattern);
-	free(line);
 }
 
 /**
@@ -721,10 +702,10 @@ static void display_entry(int *y, int *index, int color)
 		if (!is_file(*index, current)) {
 			if (color == 1) {
 				attron(A_REVERSE);
-				print_line(y, current->entries[*index].data);
+				print_line(y, current->entries[*index].data, current->entries[*index].line);
 				attroff(A_REVERSE);
 			} else {
-				print_line(y, current->entries[*index].data);
+				print_line(y, current->entries[*index].data, current->entries[*index].line);
 			}
 		} else {
 			attron(A_BOLD);
@@ -887,10 +868,14 @@ static void display_status(void)
 
 	char nbhits[15];
 	attron(COLOR_PAIR(normal));
-	if (mainsearch->status)
+	if (mainsearch->status) {
 		mvaddstr(0, COLS - 1, rollingwheel[++i%4]);
-	else
+	} else {
 		mvaddstr(0, COLS - 5, "Done.");
+#if DEBUG_PERF
+		exit(0);
+#endif
+	}
 
 	snprintf(nbhits, 15, "Hits: %d", current->nb_lines);
 	mvaddstr(1, COLS - (int)(strchr(nbhits, '\0') - nbhits), nbhits);
@@ -920,16 +905,9 @@ static inline void check_alloc(struct search *toinc, int size)
  */
 static void mainsearch_add_file(const char *file)
 {
-	char *new_file;
-	size_t file_size;
-
-	file_size = strlen(file) < 256 ? strlen(file) + 1 : 256;
-
 	check_alloc(mainsearch, 500);
-	new_file = malloc(file_size * sizeof(char));
-	strncpy(new_file, file, file_size);
-	mainsearch->entries[mainsearch->nbentry].data = new_file;
-	mainsearch->entries[mainsearch->nbentry].isfile = 1;
+	mainsearch->entries[mainsearch->nbentry].data = (char *) file;
+	mainsearch->entries[mainsearch->nbentry].line = 0;
 	mainsearch->nbentry++;
 }
 
@@ -938,21 +916,15 @@ static void mainsearch_add_file(const char *file)
  *
  * @param line	line to add (including prepended line number)
  */
-static void mainsearch_add_line(const char *line)
+static void mainsearch_add_line(const char *line, int line_nb)
 {
-	char *new_line;
-	size_t line_size;
-
-	line_size = strlen(line) < 256 ? strlen(line) + 1 : 256;
-
 	check_alloc(mainsearch, 500);
-	new_line = malloc(line_size * sizeof(char));
-	strncpy(new_line, line, line_size);
-	mainsearch->entries[mainsearch->nbentry].data = new_line;
-	mainsearch->entries[mainsearch->nbentry].isfile = 0;
+	mainsearch->entries[mainsearch->nbentry].data = (char *) line;
+	mainsearch->entries[mainsearch->nbentry].line = line_nb;
 	mainsearch->nbentry++;
 	mainsearch->nb_lines++;
 
+	//FIXME: move check somewhere else because it slows down the search thread
 	/* display entries if we're not filled yet on first screen */
 	if (mainsearch->nbentry <= (unsigned) (current->index + LINES)
 			&& current == mainsearch)
@@ -972,6 +944,12 @@ static char * strcasestr_wrapper(const char *line, const char *pattern, int siz)
 	return strcasestr(line, pattern);
 }
 
+static char * strstr_wrapper(const char *line, const char *pattern, int siz)
+{
+	S_VAR_NOT_USED(siz);
+
+	return strstr(line, pattern);
+}
 /**
  * Checks if a regexp is valid
  *
@@ -1069,73 +1047,254 @@ static inline char * rabin_karp(const char *text, const char *pattern, int tsize
 
 	return NULL;
 }
+#if 0
+static void pre_shiftor(const char *pattern)
+{
+	int i;
+	int psize;
+
+	psize = strlen(pattern);
+	if (psize > 31) {
+		pre_rabin_karp(pattern);
+		mainsearch->parser = rabin_karp;
+		return;
+	}
+
+	R = ~1;
+
+	for (i = 0; i < 256; i++)
+		mask[i] = ~0;
+
+	for (i = 0; i < psize; i++) {
+		if ((int) pattern[i] < 0) {
+			pre_rabin_karp(pattern);
+			mainsearch->parser = rabin_karp;
+			return;
+		}
+
+		mask[(int) pattern[i]] &= ~(1UL << i);
+	}
+
+	mainsearch->psize = psize;
+	mainsearch->d = (1UL << psize);
+}
+
+static inline char * shiftor(const char *text, const char *pattern, int tsize)
+{
+	int i;
+	S_VAR_NOT_USED(pattern);
+	S_VAR_NOT_USED(tsize);
+
+	i = 0;
+	while (text[i]) {
+		R |= mask[(int) text[i]];
+		R <<= 1;
+
+		if (!(R & mainsearch->d))
+			return (char *) text + i - mainsearch->psize + 1;
+
+		i++;
+	}
+
+	return NULL;
+}
+#endif
+unsigned long int skipt[256];
+
+static void pre_bmh(const char *pattern)
+{
+	int i;
+	int psize;
+
+	psize = strlen(pattern);
+	if (psize == 1) {
+		mainsearch->parser = strstr_wrapper;
+	}
+
+	for (i = 0; i < 256; i++)
+		skipt[i] = psize;
+
+	for (i = 0; i < psize -1; i++) {
+		if ((int) pattern[i] < 0) {
+			pre_rabin_karp(pattern);
+			mainsearch->parser = rabin_karp;
+			return;
+		}
+
+		skipt[(int) pattern[i]] = psize - i - 1;
+	}
+
+	mainsearch->psize = psize;
+}
+
+static inline char * bmh(const char *text, const char *pattern, int tsize)
+{
+	int i;
+	int psize;
+
+	psize = mainsearch->psize;
+
+	i = 0;
+	while (i <= tsize - psize) {
+		if (text[i + psize - 1] == pattern[psize - 1] && text[i] == pattern[0])
+			if (!memcmp(text + i + 1, pattern + 1, psize - 2))
+				return (char *) text + i;
+		if (text[i + psize - 1] > 0)
+			i += skipt[(int) text[i + psize - 1]];
+		else
+			while (text[i + psize - 1] < 0) //unicode
+				i += psize;
+	}
+
+	return NULL;
+}
+#if 0
+unsigned long int mask;
+unsigned int skip;
+
+#define BLOOM(mask, c)		((mask |= (1UL << ((c) & (32 - 1)))))
+#define BLOOM_ADD(mask, c)	((mask &= (1UL << ((c) & (32 - 1)))))
+
+static void pre_pfs(const char *pattern)
+{
+	int i;
+	int psize;
+
+	psize = strlen(pattern);
+	mask = 0;
+	skip = psize - 2;
+
+	for (i = 0; i < psize - 1; i++) {
+		if ((int) pattern[i] < 0) {
+			pre_rabin_karp(pattern);
+			mainsearch->parser = rabin_karp;
+			return;
+		}
+		BLOOM_ADD(mask, pattern[i]);
+		if (pattern[i] == pattern[psize - 1])
+			skip = psize - i - 2;
+	}
+	BLOOM_ADD(mask, pattern[psize - 1]);
+
+	mainsearch->psize = psize;
+}
+
+static inline char * pfs(const char *text, const char *pattern, int tsize)
+{
+	int i, j;
+	int psize;
+
+	psize = mainsearch->psize;
+
+	for (i = 0; i <= tsize - psize; i++) {
+		if (text[i + psize - 1] == pattern[psize - 1]) {
+			for (j = 0; j < psize; j++) { //strcmp ??
+				if (text[i + j] != pattern[j])
+					break;
+			}
+
+			if (j == psize)
+				return (char *) text + i;
+
+			if (!BLOOM(mask, text[i + psize]))
+				i += psize;
+			else
+				i += skip;
+		} else {
+			if (!BLOOM(mask, text[i + psize]))
+				i += psize;
+		}
+	}
+
+	return NULL;
+}
+#endif
+
+struct filep {
+	const char *name;
+	char *start;
+	char *mid;
+	unsigned int size;
+	unsigned int midline;
+};
+struct filep filep;
+
+struct worker_result {
+	char *line;
+	int index;
+	struct worker_result *next;
+};
+struct worker_result *worker_res[2] = {NULL, NULL};
+
+sem_t	new_file_signal;
+sem_t	is_data_for_worker[2];
+sem_t	worker_data_treated[2];
+
+int th1 = 0; // worker thread numbers
+int th2 = 1;
+int th3 = 2;
 
 /**
- * Core of ngp, parses a file and adds the file and its entries to the local
- * array if any matches are found.
+ * Core of ngp, opens file using mmap, does bound checking then signals
+ * worker threads that they can parse the file (half each)
  *
  * @param file		path of file to parse
- * @param pattern	pattern to match
  * @return		0 on success, -1 otherwise
  */
-static int parse_file(const char *file, const char *pattern)
+static int parse_file(const char *file)
 {
 	int f;
-	char *p, *start, *endline;
 	struct stat sb;
-	char full_line[LINE_MAX];
-	int first;
-	int line_number;
 	errno = 0;
+	char *p;
+	char *filename;
+	char *mid_newline;
 
-	/* open file using mmap */
+	/* wait for synchronization from data thread*/
+	sem_wait(&new_file_signal);
+
+	/* prepare file open using mmap */
 	f = open(file, O_RDONLY);
 	if (f == -1) {
+		sem_post(&new_file_signal);
 		return -1;
 	}
 
 	if (fstat(f, &sb) < 0) {
+		sem_post(&new_file_signal);
+		close(f);
+		return -1;
+	}
+
+	/* check file ain't empty */
+	if (!sb.st_size) {
+		sem_post(&new_file_signal);
 		close(f);
 		return -1;
 	}
 
 	p = mmap(0, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, f, 0);
 	if (p == MAP_FAILED) {
+		sem_post(&new_file_signal);
 		close(f);
 		return -1;
 	}
-
 	close(f);
 
-	first = 1;
-	line_number = 1;
-	start = p;
-
-	/* search the memory mapping for the pattern until EOF */
-	while ((endline = strchr(p, '\n'))) {
-		*endline = '\0';
-		if (__builtin_expect(!!(mainsearch->parser(p, pattern, endline - p) != NULL), 0)) {
-			/* if no file has been added yet, do it since a line matches */
-			if (__builtin_expect(first, 0)) {
-				/* add file to the local array */
-				mainsearch_add_file(file);
-				first = 0;
-			}
-
-			/* remove \r in line */
-			if (__builtin_expect(!!(p[strlen(p) - 2] == '\r'), 0))
-				p[strlen(p) - 2] = '\0';
-
-			/* add line to the local array */
-			snprintf(full_line, LINE_MAX, "%d:%s", line_number, p);
-			mainsearch_add_line(full_line);
-		}
-		p = endline + 1;
-		line_number++;
+	filename = strdup(file); // Need to do this because file overwritten
+	filep.name = filename;
+	filep.size = sb.st_size;
+	filep.start = p;
+	mid_newline = strchr(p + sb.st_size / 2, '\n');
+	if (!mid_newline) {	// short file that cannot be cut in 2
+		filep.mid = p + sb.st_size - 1;
+	} else {
+		filep.mid = mid_newline + 1;
 	}
 
-	if (munmap(start, sb.st_size) < 0)
-		return -1;
+	/* tell workers they can start processing the file */
+	sem_post(&is_data_for_worker[0]);
+	sem_post(&is_data_for_worker[1]);
 
 	return 0;
 }
@@ -1146,7 +1305,7 @@ static int parse_file(const char *file, const char *pattern)
  * @param file		file name
  * @param pattern	pattern to find in file
  */
-static void lookup_file(const char *file, const char *pattern)
+static void lookup_file(const char *file)
 {
 	errno = 0;
 	pthread_mutex_t		*mutex;
@@ -1155,14 +1314,14 @@ static void lookup_file(const char *file, const char *pattern)
 	/* if the search is of type raw, all file are to be parsed */
 	if (mainsearch_attr.raw) {
 		synchronized(mainsearch->data_mutex)
-			parse_file(file, pattern);
+			parse_file(file);
 		return;
 	}
 
 	/* check if file is a specific file */
 	if (is_specific_file(file)) {
 		synchronized(mainsearch->data_mutex)
-			parse_file(file, pattern);
+			parse_file(file);
 		return;
 	}
 
@@ -1171,7 +1330,7 @@ static void lookup_file(const char *file, const char *pattern)
 	while (curext) {
 		if (!strcmp(curext->ext, file + strlen(file) - strlen(curext->ext))) {
 				synchronized(mainsearch->data_mutex)
-				parse_file(file, pattern);
+				parse_file(file);
 			break;
 		}
 		curext = curext->next;
@@ -1179,13 +1338,145 @@ static void lookup_file(const char *file, const char *pattern)
 }
 
 /**
+ * Data thread saves result of worker threads in ngp's result array
+ */
+static void * save_thread(void * thnum)
+{
+	int *tnum = (int *) thnum;
+	S_VAR_NOT_USED(tnum);
+	struct worker_result *res = NULL, *tmp;
+
+	while (1) {
+		/* exit if no more files */
+		if (!mainsearch->status) {
+			return (void *) NULL;
+		}
+
+		/* wait for workers to be done */
+		sem_wait(&worker_data_treated[0]);
+		sem_wait(&worker_data_treated[1]);
+
+		if (worker_res[0] != NULL || worker_res[1] != NULL) {
+			mainsearch_add_file(filep.name);
+		} else {
+			free((void *) filep.name);
+		}
+
+		if (worker_res[0] != NULL) {
+			res = worker_res[0];
+			while (res) {
+				mainsearch_add_line(res->line, res->index);
+				tmp = res;
+				res = res->next;
+				free(tmp);
+			}
+		}
+
+		if (worker_res[1] != NULL) {
+			res = worker_res[1];
+			while (res) {
+				mainsearch_add_line(res->line, res->index + filep.midline); //FIXME: +count mid
+				tmp = res;
+				res = res->next;
+				free(tmp);
+			}
+		}
+
+		worker_res[0] = NULL;
+		worker_res[1] = NULL;
+		munmap(filep.start, filep.size); //FIXME
+		sem_post(&new_file_signal);
+	}
+
+	return NULL;
+}
+
+/**
+ * Worker threads each parse half a file
+ */
+static void * worker_thread(void * thnum)
+{
+	int *tnum = (int *) thnum;
+	char *start, *end, *p;
+	char *endline;
+	struct worker_result *cur_res = NULL, *tmp_res;
+	char *tmp_str;
+	int first;
+	int line_count;
+	int line_size;
+
+	while (1) {
+		/* exit if no more files */
+		if (!mainsearch->status) {
+			return (void *) NULL;
+		}
+
+		/* wait for work signal from mmaper */
+		sem_wait(&is_data_for_worker[*tnum]);
+
+		if (*tnum) {
+			start = filep.mid;
+			end = filep.start + filep.size;
+		} else {
+			start = filep.start;
+			end = filep.mid - 1;
+		}
+
+		p = start;
+		first = 1;
+		line_count = 1;
+
+		while (p < end && (endline = strchr(p, '\n'))) {
+			*endline = '\0';
+			if (mainsearch->parser(p, mainsearch->pattern, endline - p)) {
+				tmp_res = malloc(sizeof(struct worker_result));
+				if (!tmp_res) {
+					fprintf(stderr, "no mem for tmp_res");
+					exit(-1);
+				}
+
+				line_size = (endline - p + 1) >= 256 ? 256 : (endline - p + 1);
+				tmp_str = malloc(line_size * sizeof(char));
+				if (!tmp_str) {
+					fprintf(stderr, "no mem for tmp_str");
+					exit(-1);
+				}
+				strncpy(tmp_str, p, line_size);
+
+				tmp_res->line = tmp_str;
+				tmp_res->index = line_count;
+				tmp_res->next = NULL;
+
+				if (first) {
+					worker_res[*tnum] = tmp_res;
+					first = 0;
+				} else {
+					cur_res->next = tmp_res;
+				}
+				cur_res = tmp_res;
+			}
+			line_count++;
+			p = endline + 1;
+		}
+		/* first worker needs to tell where midline was eaxctly */
+		if (*tnum == 0)
+			filep.midline = line_count - 1;
+
+		/* tell data thread that we're finished parsing the file */
+		sem_post(&worker_data_treated[*tnum]);
+	}
+
+	return NULL;
+}
+
+
+/**
  * Recursively parses a directory and calls lookup_file if a file is found that
  * matches the criteria of the search
  *
  * @param dir		directory to parse
- * @param patter	pattern to find in files
  */
-static void lookup_directory(const char *dir, const char *pattern)
+static void lookup_directory(const char *dir)
 {
 	DIR *dp;
 
@@ -1209,7 +1500,7 @@ static void lookup_directory(const char *dir, const char *pattern)
 
 			/* check if file is a symlink and we should follow it */
 			if (!is_simlink(file_path) || mainsearch_attr.follow_symlinks)
-				lookup_file(file_path, pattern);
+				lookup_file(file_path);
 		}
 
 		/* directory */
@@ -1218,7 +1509,7 @@ static void lookup_directory(const char *dir, const char *pattern)
 			if (!is_dir_exclude(ep->d_ino)) {
 				char path_dir[PATH_MAX] = "";
 				snprintf(path_dir, PATH_MAX, "%s/%s", dir, ep->d_name);
-				lookup_directory(path_dir, pattern);
+				lookup_directory(path_dir);
 			}
 		}
 	}
@@ -1237,13 +1528,49 @@ static void * lookup_thread(void *arg)
 {
 	struct search *d = (struct search *) arg;
 
+	if (sem_init(&new_file_signal, 0, 1)) {
+		fprintf(stderr, "Error: failed creating semaphore");
+		exit(-1);
+	}
+	if (sem_init(&is_data_for_worker[0], 0, 0)) {
+		fprintf(stderr, "Error: failed creating semaphore");
+		exit(-1);
+	}
+	if (sem_init(&is_data_for_worker[1], 0, 0)) {
+		fprintf(stderr, "Error: failed creating semaphore");
+		exit(-1);
+	}
+	if (sem_init(&worker_data_treated[0], 0, 0)) {
+		fprintf(stderr, "Error: failed creating semaphore");
+		exit(-1);
+	}
+	if (sem_init(&worker_data_treated[1], 0, 0)) {
+		fprintf(stderr, "Error: failed creating semaphore");
+		exit(-1);
+	}
+
+	if (pthread_create(&pid_w1, NULL, &worker_thread, &th1)) {
+		fprintf(stderr, "Error: failed creating worker thread");
+		exit(-1);
+	}
+	if (pthread_create(&pid_w2, NULL, &worker_thread, &th2)) {
+		fprintf(stderr, "Error: failed creating worker thread");
+		exit(-1);
+	}
+	if (pthread_create(&pid_s, NULL, &save_thread, &th3)) {
+		fprintf(stderr, "Error: failed creating worker thread");
+		exit(-1);
+	}
+
+
 	if (isfile(d->directory)) {
-		parse_file(d->directory, d->pattern);
+		parse_file(d->directory);
 	} else {
-		lookup_directory(d->directory, d->pattern);
+		lookup_directory(d->directory);
 	}
 
 	d->status = 0;
+	//FIXME: wait for all children ? dunno
 	return (void *) NULL;
 }
 
@@ -1341,15 +1668,16 @@ static struct search * subsearch(struct search *father)
 			/* file has entries, add it */
 			if (orphan_file) {
 				child->entries[child->nbentry].data = new_data;
-				child->entries[child->nbentry].isfile = 1;
+				child->entries[child->nbentry].line = 0;
 				child->nbentry++;
 				orphan_file = 0;
 			}
 			/* now add line */
+			//FIXME: NO NEED TO MALLOC HERE JUST POINT TO EXISTING STRING
 			new_data = malloc((strlen(father->entries[i].data) + 1) * sizeof(char));
 			strncpy(new_data, father->entries[i].data, (strlen(father->entries[i].data) + 1));
 			child->entries[child->nbentry].data = new_data;
-			child->entries[child->nbentry].isfile = 0;
+			child->entries[child->nbentry].line = father->entries[i].line;
 			child->nb_lines++;
 			child->nbentry++;
 		}
@@ -1370,7 +1698,7 @@ static void clean_search(struct search *search)
 {
 	unsigned int i;
 
-	/* free the actual entries in the array */
+	/* free the data entries in the array */
 	for (i = 0; i < search->nbentry; i++) {
 		free(search->entries[i].data);
 	}
@@ -1442,6 +1770,9 @@ static void exit_ngp(void)
 		pthread_kill(pid, SIGINT);
 	ncurses_stop();
 	clean_all();
+#if DEBUG_PERF
+	printf("Found %d hits\n", current->nb_lines);
+#endif
 }
 
 /**
@@ -1509,10 +1840,14 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "Bad regexp\n");
 			exit(-1);
 		}
-	} else if (mainsearch_attr.is_insensitive == 0) {
+	} else if (!mainsearch_attr.is_insensitive) {
 		/* compute rabin-karp parameters on pattern */
-		mainsearch->parser = rabin_karp;
-		pre_rabin_karp(mainsearch->pattern);
+//		mainsearch->parser = rabin_karp;
+//		pre_rabin_karp(mainsearch->pattern);
+		mainsearch->parser = bmh;
+		pre_bmh(mainsearch->pattern);
+		//mainsearch->parser = pfs;
+		//pre_pfs(mainsearch->pattern);
 	} else {
 		mainsearch->parser = strcasestr_wrapper;
 	}
@@ -1594,7 +1929,7 @@ int main(int argc, char *argv[])
 		}
 
 		usleep(10000);
-		refresh();
+		refresh(); //FIXME: what's the point ?
 		synchronized(mainsearch->data_mutex) {
 			display_status();
 		}
