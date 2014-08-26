@@ -890,7 +890,8 @@ static void display_status(void)
  */
 static inline void check_alloc(struct search *toinc, int size)
 {
-	if (toinc->nbentry >= toinc->size) {
+	/* +1 because subsearch may write file+line at once */
+	if (toinc->nbentry + 1 >= toinc->size) {
 		toinc->size += size;
 		toinc->entries = realloc(toinc->entries, toinc->size * sizeof(struct entry));
 	}
@@ -1368,7 +1369,7 @@ static void * save_thread(void * thnum)
 		if (worker_res[1] != NULL) {
 			res = worker_res[1];
 			while (res) {
-				mainsearch_add_line(res->line, res->index + filep.midline); //FIXME: +count mid
+				mainsearch_add_line(res->line, res->index + filep.midline);
 				tmp = res;
 				res = res->next;
 				free(tmp);
@@ -1656,10 +1657,7 @@ static struct search * subsearch(struct search *father)
 			file = father->entries[i].data;
 			save_file = 1;
 		} else if (regex(father->entries[i].data, child->pattern, 0)) {
-			if (child->nbentry%100 >= 98) {
-				child->size += 100;
-				child->entries = realloc(child->entries, child->size * sizeof(struct entry));
-			}
+			check_alloc(child, 100);
 
 			/* file has entries, add it */
 			if (save_file) {
