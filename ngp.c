@@ -1378,15 +1378,10 @@ static void * save_thread(void * thnum)
 
 		worker_res[0] = NULL;
 		worker_res[1] = NULL;
-		munmap(filep.start, filep.size); //FIXME
+		munmap(filep.start, filep.size);
 
 		/* signal that next file can be processed */
 		sem_post(&new_file_signal);
-
-		/* exit if no more files */
-		if (!mainsearch->status) {
-			return (void *) NULL;
-		}
 	}
 
 	return NULL;
@@ -1461,11 +1456,6 @@ static void * worker_thread(void * thnum)
 
 		/* tell data thread that we're finished parsing the file */
 		sem_post(&worker_data_treated[*tnum]);
-
-		/* exit if no more files */
-		if (!mainsearch->status) {
-			return (void *) NULL;
-		}
 	}
 
 	return NULL;
@@ -1570,7 +1560,7 @@ static void * lookup_thread(void *arg)
 	}
 
 	d->status = 0;
-	//FIXME: wait for all children ? dunno
+
 	return (void *) NULL;
 }
 
@@ -1758,8 +1748,19 @@ static void ncurses_stop()
  */
 static void exit_ngp(void)
 {
+	pthread_cancel(pid_w1);
+	pthread_cancel(pid_w2);
+	pthread_cancel(pid_s);
+
 	if (pid)
 		pthread_kill(pid, SIGINT);
+
+	sem_destroy(&new_file_signal);
+	sem_destroy(&is_data_for_worker[0]);
+	sem_destroy(&is_data_for_worker[1]);
+	sem_destroy(&worker_data_treated[0]);
+	sem_destroy(&worker_data_treated[1]);
+
 	ncurses_stop();
 	clean_all();
 #if DEBUG_PERF
