@@ -1345,11 +1345,6 @@ static void * save_thread(void * thnum)
 	struct worker_result *res = NULL, *tmp;
 
 	while (1) {
-		/* exit if no more files */
-		if (!mainsearch->status) {
-			return (void *) NULL;
-		}
-
 		/* wait for workers to be done */
 		sem_wait(&worker_data_treated[0]);
 		sem_wait(&worker_data_treated[1]);
@@ -1386,6 +1381,11 @@ static void * save_thread(void * thnum)
 
 		/* signal that next file can be processed */
 		sem_post(&new_file_signal);
+
+		/* exit if no more files */
+		if (!mainsearch->status) {
+			return (void *) NULL;
+		}
 	}
 
 	return NULL;
@@ -1406,11 +1406,6 @@ static void * worker_thread(void * thnum)
 	int line_size;
 
 	while (1) {
-		/* exit if no more files */
-		if (!mainsearch->status) {
-			return (void *) NULL;
-		}
-
 		/* wait for work signal from mmaper */
 		sem_wait(&is_data_for_worker[*tnum]);
 
@@ -1458,17 +1453,22 @@ static void * worker_thread(void * thnum)
 			line_count++;
 			p = endline + 1;
 		}
+
 		/* first worker needs to tell where midline was eaxctly */
 		if (*tnum == 0)
 			filep.midline = line_count - 1;
 
 		/* tell data thread that we're finished parsing the file */
 		sem_post(&worker_data_treated[*tnum]);
+
+		/* exit if no more files */
+		if (!mainsearch->status) {
+			return (void *) NULL;
+		}
 	}
 
 	return NULL;
 }
-
 
 /**
  * Recursively parses a directory and calls lookup_file if a file is found that
@@ -1562,13 +1562,7 @@ static void * lookup_thread(void *arg)
 		exit(-1);
 	}
 
-
 	if (isfile(d->directory)) {
-		usleep(500); // simplest way to fix race condition for now
-		/* FIXME: problem is that for single file only we return
-		immediately after parse->file, unset d->status and that
-		stops the threads right when they spawn ...
-		*/
 		parse_file(d->directory);
 	} else {
 		lookup_directory(d->directory);
