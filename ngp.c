@@ -48,6 +48,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #undef LINE_MAX
 #endif
 #define LINE_MAX	256
+#define ASCII_ALPHABET	256
 
 #define S_VAR_NOT_USED(x) do{(void)(x);}while(0);
 
@@ -56,7 +57,15 @@ for(mutex = &MUTEX; \
 mutex && !pthread_mutex_lock(mutex); \
 pthread_mutex_unlock(mutex), mutex = 0)
 
+/* Used to bench ngp by exiting when all files are parsed */
 #define DEBUG_PERF	0
+
+/* search algorithm to use (Rabin-Karp fallback if unicode) */
+#define RK		0
+#define PFS		0
+#define SO		0
+#define BMH		1
+#define STRSTR		0
 
 /*************************** DATA STRUCTURES **********************************/
 /* stores an entry, a file or a line */
@@ -104,7 +113,7 @@ struct search {
 	char directory[PATH_MAX];
 	char pattern[LINE_MAX];
 	int d, hp; // Rabin-Karp parameters
-	int psize; // pattern size used by RK
+	int psize; // pattern size
 	unsigned int is_regex:1;
 	regex_t *regex;
 
@@ -936,14 +945,14 @@ static void mainsearch_add_line(const char *line, int line_nb)
  * so this function is used to accomodate strcasestr with one more param until
  * I rewrite it. FIXME :)
  */
-static char * strcasestr_wrapper(const char *line, const char *pattern, int siz)
+static inline char * strcasestr_wrapper(const char *line, const char *pattern, int siz)
 {
 	S_VAR_NOT_USED(siz);
 
 	return strcasestr(line, pattern);
 }
 
-static char * strstr_wrapper(const char *line, const char *pattern, int siz)
+static inline char * strstr_wrapper(const char *line, const char *pattern, int siz)
 {
 	S_VAR_NOT_USED(siz);
 
@@ -1008,6 +1017,9 @@ static void pre_rabin_karp(const char *pattern)
 	int psize;
 
 	psize = strlen(pattern);
+	if (psize == 1) {
+		mainsearch->parser = strstr_wrapper;
+	}
 
 	/* compute shift */
 	mainsearch->d = 1 << (psize - 1);
@@ -1046,13 +1058,20 @@ static inline char * rabin_karp(const char *text, const char *pattern, int tsize
 
 	return NULL;
 }
-#if 0
+
+#if SO
+unsigned long int R;
+unsigned long int mask[ASCII_ALPHABET];
+
 static void pre_shiftor(const char *pattern)
 {
 	int i;
 	int psize;
 
 	psize = strlen(pattern);
+	if (psize == 1) {
+		mainsearch->parser = strstr_wrapper;
+	}
 	if (psize > 31) {
 		pre_rabin_karp(pattern);
 		mainsearch->parser = rabin_karp;
@@ -1061,7 +1080,7 @@ static void pre_shiftor(const char *pattern)
 
 	R = ~1;
 
-	for (i = 0; i < 256; i++)
+	for (i = 0; i < ASCII_ALPHABET; i++)
 		mask[i] = ~0;
 
 	for (i = 0; i < psize; i++) {
@@ -1098,7 +1117,9 @@ static inline char * shiftor(const char *text, const char *pattern, int tsize)
 	return NULL;
 }
 #endif
-unsigned long int skipt[256];
+
+#if BMH
+unsigned long int skipt[ASCII_ALPHABET];
 
 static void pre_bmh(const char *pattern)
 {
@@ -1110,7 +1131,7 @@ static void pre_bmh(const char *pattern)
 		mainsearch->parser = strstr_wrapper;
 	}
 
-	for (i = 0; i < 256; i++)
+	for (i = 0; i < ASCII_ALPHABET; i++)
 		skipt[i] = psize;
 
 	for (i = 0; i < psize -1; i++) {
@@ -1126,6 +1147,11 @@ static void pre_bmh(const char *pattern)
 	mainsearch->psize = psize;
 }
 
+/**
+ * Tuned Boyer-Moore-Horspool algorithm:
+ * - Checks last, first character of pattern
+ * - skips if unicode text
+ */
 static inline char * bmh(const char *text, const char *pattern, int tsize)
 {
 	int i;
@@ -1147,7 +1173,9 @@ static inline char * bmh(const char *text, const char *pattern, int tsize)
 
 	return NULL;
 }
-#if 0
+#endif
+
+#if PFS
 unsigned long int mask;
 unsigned int skip;
 
@@ -1426,7 +1454,7 @@ static void * worker_thread(void * thnum)
 					exit(-1);
 				}
 
-				line_size = (endline - p + 1) >= 256 ? 256 : (endline - p + 1);
+				line_size = (endline - p + 1) >= LINE_MAX ? LINE_MAX : (endline - p + 1);
 				tmp_str = malloc(line_size * sizeof(char));
 				if (!tmp_str) {
 					fprintf(stderr, "no mem for tmp_str");
@@ -1835,12 +1863,25 @@ int main(int argc, char *argv[])
 		}
 	} else if (!mainsearch_attr.is_insensitive) {
 		/* compute rabin-karp parameters on pattern */
-//		mainsearch->parser = rabin_karp;
-//		pre_rabin_karp(mainsearch->pattern);
-		mainsearch->parser = bmh;
+#if RK
+		mainsearch->parser = rabin_karp;	// 12.328/2.976/4.676	11.833/2.324/4.700
+		pre_rabin_karp(mainsearch->pattern);
+#endif
+#if SO
+		mainsearch->parser = shiftor;		// 12.899/3.520/4.944	12.542/3.204/4.848
+		pre_shiftor(mainsearch->pattern);
+#endif
+#if BMH
+		mainsearch->parser = bmh;		// 12.346/2.704/4.964	11.312/1.636/4.624
 		pre_bmh(mainsearch->pattern);
-		//mainsearch->parser = pfs;
-		//pre_pfs(mainsearch->pattern);
+#endif
+#if PFS
+		mainsearch->parser = pfs;		// 13.000/3.976/4.700   11.878/2.308/4.812
+		pre_pfs(mainsearch->pattern);
+#endif
+#if STRSTR
+		mainsearch->parser = strstr_wrapper;	// 13.337/4.012/4.960	13.288/4.100/4.896
+#endif
 	} else {
 		mainsearch->parser = strcasestr_wrapper;
 		mainsearch->psize = strlen(mainsearch->pattern);
