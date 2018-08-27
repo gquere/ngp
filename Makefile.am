@@ -1,7 +1,0 @@
-bin_PROGRAMS = ngp
-ngp_SOURCES = ngp.c
-dist_doc_DATA = README
-AM_LDFLAGS = -lncurses -lpthread
-sysconfdir = /etc
-ngp_DATA = ngprc
-ngpdir = $(sysconfdir)/

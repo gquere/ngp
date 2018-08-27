@@ -1,9 +1,0 @@
-AC_INIT([ngp], [0.1], [gquere@ece.fr])
-AM_INIT_AUTOMAKE
-AC_PROG_CC
-CFLAGS="$CFLAGS -Wall -Wextra -Werror"
-AC_CHECK_HEADERS(regex.h,,AC_MSG_ERROR(oops no regex.h ?))
-AC_CHECK_LIB(pthread, pthread_create,,AC_MSG_ERROR(oops no lib pthread ?))
-AC_CHECK_LIB(ncurses, initscr,,AC_MSG_ERROR(oops no lib ncurses ?))
-AC_CONFIG_FILES([Makefile])
-AC_OUTPUT
